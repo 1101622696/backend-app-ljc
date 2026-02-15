@@ -1,0 +1,13 @@
+{
+  "type": "service_account",
+  "project_id": "app-ljc",
+  "private_key_id": "c3d3a62242585292af3dec874f1ed881b1074766",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDBhXIVvOwoTEtF\n4XPASZ7AteeB9T40EL/9HynEjgn/QaIy4V2Gf5qM1/6kVwPM4wkw6eC5SnxX2mxB\nrwSIVnFFOrlvHflpXxFwXNHJVRLr2yUQS7w6PeHH2QpGRLYKuTRlitb4SsZnSuFt\nAilmIEUHJFrovqwg4yRG6r6K95zd6iQHiwGGzkK6uEj/e5jSnNBIc5ioWEEi84WT\nCBSxJYf0nIubW+T7nVg4JJyjf03SCpUg/euVfz+EgbPu9C7VNUHs9nq23g4dIao5\ntfhSAczvTM4ZEjM6D6JDd+6O9UZBoRqN5Lb4GwCINB/eEAbNsUyFlsZTFjYWENaD\n2Lz5OzFhAgMBAAECggEAISAIgTQPcG5uzA1lVNrFM9NvR02FUkAzvM4ixiRSDcFc\nVD1DVwxslgM68UJ7wgxyvE6sSss3MYqP0UZ2DihNxz3gE+cblC/TuloJBt9rF7gx\nRfLQy19gUGcUXSbRylAdaew0E9go0fF9WL1v/K01Y52Tehd5Oz/mK8VuzDbKQSnQ\nmy/h5yznaivy1qHfQG4WWnqGXRyWIhlL/qlHzCO8lKB6xJRhq7RowbB1YX+ppovm\nb+KG2MO3x51+FFPwTyw9+2eP/QUbh9H+U0148zF6k01asUTBW/H5BSA0AZIRDo6g\nIODPxYvovH8eW8taHeJEK3UEH4Niw7jG8ESpGgvIYQKBgQDtE7whjEyyn9Vq2++V\nKOsjXvap9A6vT3rcbfRAsnu16MnkmlVDTKjZTw++3g48Im97UZjzER8jKesUzwBt\nFOWYXw5Ejkt+TYK3+c+m95nZG5SV6byfMYkfwZ8ZMfeHxQPyznzKT0AS332PVv72\nWZoMwn9YsWyTBJN1329kG8I7bQKBgQDQ97jZ4lf4dhdgnO+DohZLusb9CzYwgQLb\n/WLp0wqQFjRt1l78mSMJ+eUxVz2bA8cq4n74KwsRvBgQ9RhM+fFu3j7aFmHlXdlR\nVfLoruxcsSvITgSBcQNFJAbnq6D8xbzn3Jg+TZSihllM9UvOYgIduGJtBq1fikQg\n8wOsauTBRQKBgQCQkWQ7oO50Tns5+nwSnS0mGJaZ9LWvuevV10cG3NALkbTrriEo\nNOsR+OBFJ+vOR8FrlcqLDnnKW5l6yvAblI6dZ/mvXIY0stdvkOpLitlKR0NIV4wq\nF27i6pM2Lf4f0MgjnD8Er2cHGznZ2tcHKoSCG2jEkQ0Aad3yFxo6FaNP0QKBgBL1\nhsXt7UFTpYdUdb6hpBg21/r5W29HJTVEZgcE6L5t5U/Z1UBhvHYZQBwb6DD6RMW1\nSwPFE/oF8MEJG61QOAFxFI7A3RzsSN1CSQmnZTZ7tJc1zN7ZnAxX2nCGd9K3Ng5r\nSzzL2SJtwghjcP9GkR6VLgjqRCyY5NmAcuLfx+VpAoGANRosJ/HVYe9KbuMukPQ5\n+E1ypjY7mUhG2uhcTpPggbjrQJNzcwNoUG/9Bpc0ws2Vk1yW7qthi8U2pungYdvu\nheMwFUZVSyGj/MNbEJ4EYdfcs22bBe1SChQIL4GUMVrmBGP5WeuwtT+3tBP4veMl\n4SFLvwwjRR8OQVIklnTfAFw=\n-----END PRIVATE KEY-----\n",
+  "client_email": "backend-app-ljc@app-ljc.iam.gserviceaccount.com",
+  "client_id": "116726078406741929075",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/backend-app-ljc%40app-ljc.iam.gserviceaccount.com",
+  "universe_domain": "googleapis.com"
+}
