@@ -12,7 +12,6 @@ const validarJWT = async (req, res, next) => {
 
         const { id, perfil, email, nombre } = decoded;
       const usuarios = await usuarioHelper.getUsuarios();
-      // Buscar por id o email, dependiendo de lo que hayas usado para generar el token
       const usuario = usuarios.find(u => u.id === id || u.email === id);
   
       if (!usuario) {
@@ -27,7 +26,8 @@ const validarJWT = async (req, res, next) => {
         id,
         email,
         perfil,
-        nombre
+        nombre,
+        placa_asignada: decoded.placa_asignada || null
       };
 
       next();

@@ -1,24 +1,19 @@
-import Usuario from '../models/usuarios.js'; // Asegúrate que exista el modelo
-import { generarJWT } from './generar-jwt.js'; // Ajusta el path si lo moviste
+import { generarJWT } from './generar-jwt.js'; 
 
 import { google } from 'googleapis';
 
-const spreadsheetId = '1fTu_oEvbL5RG0TSL5rIs2YKFtX8BXTymVkXVhBM0_ts';
+const spreadsheetId = '1UtSm_ZBiNWt2njncuJ5PSHreMbj3InG9gyXapqVUBEQ';
 
 const getAuth = () => {
-  // Verificar si estamos en producción (Render)
   if (process.env.GOOGLE_CLIENT_EMAIL && process.env.GOOGLE_PRIVATE_KEY) {
-    // Usar variables de entorno
     return new google.auth.GoogleAuth({
       credentials: {
         client_email: process.env.GOOGLE_CLIENT_EMAIL,
         private_key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
-        // Añade otras variables según sea necesario
       },
       scopes: ['https://www.googleapis.com/auth/spreadsheets'],
     });
   } else {
-    // Para desarrollo local, usar el archivo
     return new google.auth.GoogleAuth({
       keyFile: './config/credenciales-sheets.json',
       scopes: ['https://www.googleapis.com/auth/spreadsheets'],
@@ -26,19 +21,16 @@ const getAuth = () => {
   }
 };
 
-// Cliente Sheets
-// Client Sheets
 const getSheetsClient = async () => {
   const auth = getAuth();
-  // No need to get the client separately
   return google.sheets({ version: 'v4', auth });
 };
 
 const leerUsuariosDesdeSheets = async () => {
   const sheets = await getSheetsClient();
   
-  const spreadsheetId = '1fTu_oEvbL5RG0TSL5rIs2YKFtX8BXTymVkXVhBM0_ts'; 
-  const range = 'Usuarios!A1:G1200'; 
+  const range = 'Usuarios!A1:AB15'; 
+const spreadsheetId = '1UtSm_ZBiNWt2njncuJ5PSHreMbj3InG9gyXapqVUBEQ';
 
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId,
@@ -59,7 +51,30 @@ const leerUsuariosDesdeSheets = async () => {
       nombre: userData.nombre || '',
       password: userData.password || '',
       perfil: userData.perfil || '',
-      estado: (userData.estado || '').toLowerCase()
+      estado: userData.estado || '',
+      placa_asignada: userData.placa_asignada || '',
+      tipo_documento: userData.tipo_documento || '',
+      documento: userData.documento || '',
+      ciudad_expedicion: userData.ciudad_expedicion || '',
+      fecha_expedicion: userData.fecha_expedicion || '',
+      pais_nacimiento: userData.pais_nacimiento || '',
+      ciudad_nacimiento: userData.ciudad_nacimiento || '',
+      fecha_nacimiento: userData.fecha_nacimiento || '',
+      grupo_sanguineo_rh: userData.grupo_sanguineo_rh || '',
+      genero: userData.genero || '',
+      estado_civil: userData.estado_civil || '',
+      telefono: userData.telefono || '',
+      tipo_licencia: userData.tipo_licencia || '',
+      num_licencia: userData.num_licencia || '',
+      fecha_expedicion_licencia: userData.fecha_expedicion_licencia || '',
+      fecha_vencimiento: userData.fecha_vencimiento || '',
+      viajes_realizados: userData.viajes_realizados || '',
+      banco: userData.banco || '',
+      num_cuenta: userData.num_cuenta || '',
+      salario_base: userData.salario_base || '',
+      sso: userData.sso || '',
+      codigo: userData.codigo || '',
+      fecha_codigo: userData.fecha_codigo || '',
     };
   });  
 
@@ -89,7 +104,8 @@ const loginUsuario = async ({ email, password }) => {
       usuario.id || usuario.email, 
       usuario.perfil,
       usuario.email,
-      usuario.nombre
+      usuario.nombre,
+      usuario.placa_asignada || null 
     );
       
     return {
@@ -99,6 +115,7 @@ const loginUsuario = async ({ email, password }) => {
         nombre: usuario.nombre,
         email: usuario.email,
         perfil: usuario.perfil,
+        placa_asignada: usuario.placa_asignada || null
       }
     };
   };
@@ -116,7 +133,6 @@ const loginUsuario = async ({ email, password }) => {
       usuario.email && usuario.email.toLowerCase() === email.toLowerCase()
     );
   };
-  
   
   const getUsuarioByPerfil = async (perfile) => {
     const usuarios = await getUsuarios();
@@ -141,27 +157,27 @@ const getUsuarioPorEstado = async (valor) => {
   return filtrarUsuarioPorCampoTexto(usuarios, "estado", valor);
 };
 
-  const guardarUsuario = async ({ nombre, email, password, perfil, codigopassword, fechacodigo, estado }) => {
+const guardarUsuario = async ({ nombre, email, password, perfil, estado,  placa_asignada, tipo_documento, documento, ciudad_expedicion, fecha_expedicion, pais_nacimiento, ciudad_nacimiento, fecha_nacimiento, grupo_sanguineo_rh, genero, estado_civil, telefono, tipo_licencia, num_licencia, fecha_expedicion_licencia, fecha_vencimiento, viajes_realizados, banco, num_cuenta, salario_base, sso, codigo, fechacodigo }) => {
     const sheets = await getSheetsClient();
-    const nuevaFila = [nombre, email, password, perfil, codigopassword, fechacodigo, estado];
+    const nuevaFila = [nombre, email, password, perfil, estado,  placa_asignada, tipo_documento, documento, ciudad_expedicion, fecha_expedicion, pais_nacimiento, ciudad_nacimiento, fecha_nacimiento, grupo_sanguineo_rh, genero, estado_civil, telefono, tipo_licencia, num_licencia, fecha_expedicion_licencia, fecha_vencimiento, viajes_realizados, banco, num_cuenta, salario_base, sso, codigo, fechacodigo];
   
     await sheets.spreadsheets.values.append({
       spreadsheetId,
-      range: 'Usuarios!A1:G1200',
+      range: 'Usuarios!A1:AB15',
       valueInputOption: 'RAW',
       insertDataOption: 'INSERT_ROWS',
       requestBody: { values: [nuevaFila] },
     });
   
     return { nombre };
-  };
+};
 
-  const editarUsuario= async (email, nuevosDatos) => {
+const editarUsuario= async (email, nuevosDatos) => {
     const sheets = await getSheetsClient();
   
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId,
-      range: 'Usuarios!A2:N', 
+      range: 'Usuarios!A2:AB15', 
     });
   
     const filas = response.data.values;
@@ -180,15 +196,38 @@ const getUsuarioPorEstado = async (valor) => {
       filaActual[2], 
       nuevosDatos.perfil || filaActual[3],
       filaActual[4], 
-      filaActual[5], 
-      filaActual[6], 
+      nuevosDatos.placa_asignada || filaActual[5], 
+      nuevosDatos.tipo_documento || filaActual[6], 
+      nuevosDatos.documento || filaActual[7], 
+      nuevosDatos.ciudad_expedicion || filaActual[8], 
+      nuevosDatos.fecha_expedicion || filaActual[9], 
+      nuevosDatos.pais_nacimiento || filaActual[10], 
+      nuevosDatos.ciudad_nacimiento || filaActual[11], 
+      nuevosDatos.fecha_nacimiento || filaActual[12], 
+      nuevosDatos.grupo_sanguineo_rh || filaActual[13], 
+      nuevosDatos.genero || filaActual[14], 
+      nuevosDatos.estado_civil || filaActual[15], 
+      nuevosDatos.telefono || filaActual[16], 
+      nuevosDatos.tipo_licencia || filaActual[17], 
+      nuevosDatos.num_licencia || filaActual[18], 
+      nuevosDatos.fecha_expedicion_licencia || filaActual[19], 
+      nuevosDatos.fecha_vencimiento || filaActual[20], 
+      nuevosDatos.viajes_realizados || filaActual[21], 
+      nuevosDatos.banco || filaActual[22], 
+      nuevosDatos.num_cuenta || filaActual[23], 
+      nuevosDatos.salario_base || filaActual[24], 
+      nuevosDatos.sso || filaActual[25], 
+      nuevosDatos.perfil || filaActual[26], 
+      filaActual[27],
+      filaActual[28],
+
     ];
   
     const filaEnHoja = filaIndex + 2; 
   
     await sheets.spreadsheets.values.update({
       spreadsheetId,
-      range: `Usuarios!A${filaEnHoja}:G${filaEnHoja}`,
+      range: `Usuarios!A${filaEnHoja}:AB${filaEnHoja}`,
       valueInputOption: 'RAW',
       requestBody: {
         values: [filaEditada],
@@ -196,9 +235,9 @@ const getUsuarioPorEstado = async (valor) => {
     });
   
     return true;
-  };
+};
 
-  const editarPasswordUsuario= async (email, password) => {
+const editarPasswordUsuario= async (email, password) => {
     const sheets = await getSheetsClient();
   
     const response = await sheets.spreadsheets.values.get({
@@ -224,6 +263,27 @@ const getUsuarioPorEstado = async (valor) => {
       filaActual[4], 
       filaActual[5], 
       filaActual[6], 
+      filaActual[7], 
+      filaActual[8], 
+      filaActual[9], 
+      filaActual[10], 
+      filaActual[11], 
+      filaActual[12], 
+      filaActual[13], 
+      filaActual[14], 
+      filaActual[15], 
+      filaActual[16], 
+      filaActual[17], 
+      filaActual[18], 
+      filaActual[19], 
+      filaActual[20], 
+      filaActual[21], 
+      filaActual[22], 
+      filaActual[23], 
+      filaActual[24], 
+      filaActual[25], 
+      nuevosDatos.codigo || filaActual[26],
+      nuevosDatos.fechacodigo || filaActual[27],
     ];
   
     const filaEnHoja = filaIndex + 2; 
@@ -238,13 +298,12 @@ const getUsuarioPorEstado = async (valor) => {
     });
   
     return true;
-  };
+};
   
-  const actualizarEstadoEnSheets = async (email, nuevoEstado = "activo") => {
+const actualizarEstadoEnSheets = async (email, nuevoEstado = "activo") => {
     try {
       const sheets = await getSheetsClient();
       
-      // Primero, obtener todos los datos para encontrar la fila del email
       const response = await sheets.spreadsheets.values.get({
         spreadsheetId,
         range: 'Usuarios',
@@ -295,10 +354,10 @@ const getUsuarioPorEstado = async (valor) => {
       console.error('Error al actualizar el estado en Google Sheets:', error);
       throw error;
     }
-  };
+};
   
   // Función auxiliar para convertir número de columna a letra
-  function getColumnLetter(columnNumber) {
+function getColumnLetter(columnNumber) {
     let columnLetter = '';
     while (columnNumber > 0) {
       const remainder = (columnNumber - 1) % 26;
@@ -306,7 +365,7 @@ const getUsuarioPorEstado = async (valor) => {
       columnNumber = Math.floor((columnNumber - 1) / 26);
     }
     return columnLetter;
-  }
+}
 
 export const usuarioHelper = {
   getUsuarios,
@@ -321,5 +380,6 @@ export const usuarioHelper = {
   getUsuarioPorPerfil,
   getUsuarioPorEstado,
   getAuth,
-  getSheetsClient
+  getSheetsClient,
+  leerUsuariosDesdeSheets
 };

@@ -1,4 +1,3 @@
-// import Usuario from "../models/usuarios.js";
 import { generarJWT } from "../helpers/generar-jwt.js";
 import { usuarioHelper } from '../helpers/usuarios.js';
 import { firebaseHelper } from '../helpers/firebase.js';
@@ -9,7 +8,6 @@ const FILTRO_HANDLERS = {
   estado: usuarioHelper.getUsuarioPorEstado
 };
 const TIPOS_FILTRO = Object.keys(FILTRO_HANDLERS);
-
 
 const httpUsuarios = {
   getUsuariosDesdeSheets: async (req, res) => {
@@ -22,26 +20,22 @@ const httpUsuarios = {
     }
   },
 
-  login: async (req, res) => {
-    const { email, password } = req.body;
+login: async (req, res) => {
+  const { email, password } = req.body;
   
-    // console.log('Login desde origen:', req.headers.origin);
-    // console.log("Headers:", req.headers);
-    // console.log("Body completo:", req.body);
-    
-    try {
-      const { token, usuario } = await usuarioHelper.loginUsuario({ email, password });
-  
-      return res.json({
-        token,
-        usuario
-      });
-  
-    } catch (error) {
-      console.error("Error en login:", error.message);
-      res.status(400).json({ msg: error.message });
-    }
-  },
+  try {
+    const { token, usuario } = await usuarioHelper.loginUsuario({ email, password });
+
+    return res.json({
+      token,
+      usuario
+    });
+
+  } catch (error) {
+    console.error("Error en login:", error); 
+    res.status(400).json({ msg: error?.message || 'Error en el login' });
+  }
+},
 
   obtenerUsuariosActivos: async (req, res) => {
     try {
@@ -152,18 +146,22 @@ const httpUsuarios = {
   }
 },
 
-    crearUsuario: async (req, res) => {
-      try {
-        const {nombre, email, password, perfil} = req.body;
+crearUsuario: async (req, res) => {
+  try {
+    const {nombre, email, password, perfil, placa_asignada, tipo_documento, documento, ciudad_expedicion, fecha_expedicion, pais_nacimiento, ciudad_nacimiento, fecha_nacimiento, grupo_sanguineo_rh, genero, estado_civil, telefono, tipo_licencia, num_licencia, fecha_expedicion_licencia, viajes_realizados, banco, num_cuenta, salario_base, sso} = req.body;
   
       const estado = req.body.estado || "activo";
-      const codigopassword = req.body.fechacodigo || "";
+      const codigo = req.body.fechacodigo || "";
       const fechacodigo = req.body.fechacodigo || "";
   
-      const resultado = await usuarioHelper.guardarUsuario({nombre, email, password, perfil, codigopassword, fechacodigo, estado });
+      const fecha_vencimiento = fecha_expedicion_licencia 
+      ? new Date(new Date(fecha_expedicion_licencia).setFullYear(new Date(fecha_expedicion_licencia).getFullYear() + 2)).toISOString().split('T')[0]
+      : null;
+
+      const resultado = await usuarioHelper.guardarUsuario({nombre, email, password, perfil, estado,  placa_asignada, tipo_documento, documento, ciudad_expedicion, fecha_expedicion, pais_nacimiento, ciudad_nacimiento, fecha_nacimiento, grupo_sanguineo_rh, genero, estado_civil, telefono, tipo_licencia, num_licencia, fecha_expedicion_licencia, fecha_vencimiento, viajes_realizados, banco, num_cuenta, salario_base, sso, codigo, codigo, fechacodigo });
     
         res.status(200).json({
-          mensaje: 'usuario guardado correctamente',
+          mensaje: 'Usuario guardado correctamente',
           nombre: resultado.nombre,
          
         });
@@ -171,7 +169,7 @@ const httpUsuarios = {
         console.error('Error al guardar usuario:', error);
         res.status(500).json({ mensaje: 'Error interno del servidor' });
       }
-    },
+},
     
       editarUsuario: async (req, res) => {
         try {
@@ -214,7 +212,11 @@ const httpUsuarios = {
         const { email } = req.params;
         const { estado } = req.body; 
         
-        const resultado = await usuarioHelper.actualizarEstadoEnSheets(email, estado || "Activo");
+        const resultado = await usuarioHelper.actualizarEstadoEnSheets(email, estado || "activo");
+
+    if (!resultado) {
+            return res.status(404).json({ mensaje: 'Usuario no encontrado' });
+    }
     
         res.status(200).json({ mensaje: 'Estado actualizado correctamente' });
       } catch (error) {
@@ -231,8 +233,12 @@ const httpUsuarios = {
         const { email } = req.params;
         const { estado } = req.body; 
         
-        const resultado = await usuarioHelper.actualizarEstadoEnSheets(email, estado || "Inactivo");
+        const resultado = await usuarioHelper.actualizarEstadoEnSheets(email, estado || "inactivo");
     
+      if (!resultado) {
+            return res.status(404).json({ mensaje: 'Usuario no encontrado' });
+          }
+
         res.status(200).json({ mensaje: 'Estado actualizado correctamente' });
       } catch (error) {
         console.error('Error al editar estado del usuario:', error);

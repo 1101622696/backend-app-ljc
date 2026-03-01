@@ -38,7 +38,7 @@ const getDriveClient = async () => {
   return google.drive({ version: 'v3', auth: client });
 };
 
-const obtenerDatosSolicitud = async (nombreHoja, rango = 'A1:I1000') => {
+const obtenerDatosMantenimiento = async (nombreHoja, rango = 'A1:J1000') => {
   const sheets = await getSheetsClient();
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId,
@@ -54,10 +54,10 @@ const obtenerDatosSolicitud = async (nombreHoja, rango = 'A1:I1000') => {
   );
 };
 
-const getSolicitudes = async () => {
-  const solicitudes = await obtenerDatosSolicitud('Solicitudes');
+const getMantenimientos = async () => {
+  const mantenimientos = await obtenerDatosMantenimiento('Mantenimientos');
   
-  return solicitudes.sort((a, b) => {
+  return mantenimientos.sort((a, b) => {
     const numA = parseInt(a.consecutivo.replace(/\D/g, ''), 10);
     const numB = parseInt(b.consecutivo.replace(/\D/g, ''), 10);
     
@@ -66,26 +66,26 @@ const getSolicitudes = async () => {
 };
 
 const getSiguienteConsecutivo = async () => {
-  const solicitudes = await getSolicitudes();
+  const mantenimientos = await getMantenimientos();
   
-  if (!solicitudes.length) return "S-1";
+  if (!mantenimientos.length) return "M-1";
 
-  const ultimo = solicitudes[0].consecutivo;
+  const ultimo = mantenimientos[0].consecutivo;
 
   const numero = parseInt(ultimo.split('-')[1], 10) || 0;
   
-  return `S-${numero + 1}`;
+  return `M-${numero + 1}`;
 };
 
-const guardarSolicitud = async ({ placa, tipo_mantenimiento, descripcion, odometro, correo_usuario, usuario, fecha_creacion, Link}) => {
+const guardarMantenimiento = async ({ placa, tipo_mantenimiento, descripcion, valor_mantenimiento, odometro, correo_usuario, usuario, fecha_creacion, Link}) => {
   const sheets = await getSheetsClient();
   const consecutivo = await getSiguienteConsecutivo();
  
-  const nuevaFila = [consecutivo, placa, tipo_mantenimiento, descripcion, odometro, correo_usuario , usuario , fecha_creacion, Link];
+  const nuevaFila = [consecutivo, placa, tipo_mantenimiento, descripcion, valor_mantenimiento, odometro, correo_usuario , usuario , fecha_creacion, Link];
 
   await sheets.spreadsheets.values.append({
     spreadsheetId,
-    range: 'Solicitudes!A1',
+    range: 'Mantenimientos!A1',
     valueInputOption: 'RAW',
     insertDataOption: 'INSERT_ROWS',
     requestBody: { values: [nuevaFila] },
@@ -94,17 +94,17 @@ const guardarSolicitud = async ({ placa, tipo_mantenimiento, descripcion, odomet
   return { consecutivo };
 };
 
-const getSolicitudesByConsecutivo = async (consecutivo) => {
-  const solicitudes = await getSolicitudes();
-  return solicitudes.find(solicitud => 
-    solicitud.consecutivo && solicitud.consecutivo.toLowerCase() === consecutivo.toLowerCase()
+const getMantenimientosByConsecutivo = async (consecutivo) => {
+  const mantenimientos = await getMantenimientos();
+  return mantenimientos.find(mantenimiento => 
+    mantenimiento.consecutivo && mantenimiento.consecutivo.toLowerCase() === consecutivo.toLowerCase()
   );
 };
 
-const getResumenSolicitudesPorSolicitante = async (email) => {
+const getResumenMantenimientosPorSolicitante = async (email) => {
   try {
-    const todoslosSolicitudes = await getSolicitudes();
-    const solicitudesFiltradas = todoslosSolicitudes.filter(s => s.correo_usuario  === email);
+    const todoslosMantenimientos = await getMantenimientos();
+    const mantenimientosFiltrados = todoslosMantenimientos.filter(m => m.correo_usuario  === email);
 
     const mapConDatos = (lista) => {
       return lista.map(r => ({
@@ -122,14 +122,59 @@ const getResumenSolicitudesPorSolicitante = async (email) => {
 
     return {
       total: {
-        count: solicitudesFiltradas.length,
-        consecutivos: mapConDatos(solicitudesFiltradas)
+        count: mantenimientosFiltrados.length,
+        consecutivos: mapConDatos(mantenimientosFiltrados)
       }
     };
   } catch (error) {
-    console.error('Error al obtener resumen de solicitudes por email:', error);
+    console.error('Error al obtener resumen de mantenimientos por email:', error);
     throw error;
   }
+};
+
+const editarMantenimientoporConsecutivo = async (consecutivo, nuevosDatos) => {
+  const sheets = await getSheetsClient();
+
+  const response = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: 'Mantenimientos!A2:J1000', 
+  });
+
+  const filas = response.data.values;
+  const filaIndex = filas.findIndex(fila => fila[0]?.toLowerCase() === consecutivo.toLowerCase());
+
+  if (filaIndex === -1) {
+    return null; 
+  }
+
+  // teer los datos actuales
+  const filaActual = filas[filaIndex];
+  
+  const filaEditada = [
+  filaActual[0], 
+  nuevosDatos.placa || filaActual[1],
+  nuevosDatos.tipo_mantenimiento || filaActual[2],
+  nuevosDatos.descripcion || filaActual[3],
+  nuevosDatos.valor_mantenimiento || filaActual[4],
+  nuevosDatos.odometro || filaActual[5],
+  filaActual[6], 
+  filaActual[7], 
+  filaActual[8], 
+  nuevosDatos.Link || filaActual[9],
+];
+
+  const filaEnHoja = filaIndex + 2; 
+
+  await sheets.spreadsheets.values.update({
+    spreadsheetId,
+    range: `Mantenimientos!A${filaEnHoja}:J${filaEnHoja}`,
+    valueInputOption: 'RAW',
+    requestBody: {
+      values: [filaEditada],
+    },
+  });
+
+  return true;
 };
 
 const crearCarpeta = async (nombreCarpeta, parentFolderId) => {
@@ -179,7 +224,7 @@ const procesarArchivos = async (archivos, consecutivo) => {
     return null;
   }
   
-  const carpetaPadreId = '1XQOlaYg0P4pT_OE3ClbgHqxTdtV8v1Ga';
+  const carpetaPadreId = '1pRUDMsCXZv3T_E_aloHqwjRvMt3DM4Fn';
   
   let carpeta = await buscarCarpetaPorNombre(consecutivo, carpetaPadreId);
   
@@ -196,12 +241,53 @@ const procesarArchivos = async (archivos, consecutivo) => {
   return carpeta.webViewLink;
 };
 
+const subirArchivosACarpetaExistente = async (archivos, carpetaId) => {
+  if (!archivos || archivos.length === 0) {
+    return null;
+  }
+  
+  // Subir cada archivo a la carpeta existente
+  const enlaces = [];
+  for (const archivo of archivos) {
+    const enlace = await subirArchivo(archivo, carpetaId);
+    enlaces.push(enlace);
+  }
+  
+  // Devolver el enlace a la carpeta (necesitamos obtenerlo)
+  const drive = await getDriveClient();
+  const carpeta = await drive.files.get({
+    fileId: carpetaId,
+    fields: 'webViewLink'
+  });
+  
+  return carpeta.data.webViewLink;
+};
 
-export const solicitudHelper = {
-  getSolicitudes,
-  guardarSolicitud,
+const buscarCarpetaPorNombre = async (nombreCarpeta, parentFolderId) => {
+  const drive = await getDriveClient();
+  
+  // Crear consulta para buscar por nombre exacto dentro de la carpeta padre
+  let query = `name = '${nombreCarpeta}' and mimeType = 'application/vnd.google-apps.folder'`;
+  if (parentFolderId) {
+    query += ` and '${parentFolderId}' in parents`;
+  }
+  
+  const response = await drive.files.list({
+    q: query,
+    fields: 'files(id, name, webViewLink)',
+    spaces: 'drive'
+  });
+  
+  return response.data.files.length > 0 ? response.data.files[0] : null;
+};
+
+export const mantenimientoHelper = {
+  getMantenimientos,
+  guardarMantenimiento,
   getSiguienteConsecutivo,  
-  getSolicitudesByConsecutivo,
-  getResumenSolicitudesPorSolicitante,
+  getMantenimientosByConsecutivo,
+  getResumenMantenimientosPorSolicitante,
+  editarMantenimientoporConsecutivo,
   procesarArchivos,
+  subirArchivosACarpetaExistente
 };

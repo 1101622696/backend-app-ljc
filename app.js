@@ -4,10 +4,14 @@ import dbConexion from "./database/cnxmongoose.js";
 import cors from "cors";
 import usuarios from "./routes/usuarios.js"
 import solicitudes from "./routes/solicitudes.js"
-import pilotos from "./routes/pilotos.js"
-import prevuelos from "./routes/prevuelos.js"
-import postvuelos from "./routes/postvuelos.js"
-import mantenimiento from "./routes/mantenimiento.js"
+import vehiculos from "./routes/vehiculos.js"
+import clientes from "./routes/clientes.js"
+import preoperacionales from "./routes/preoperacionales.js"
+import viajes from "./routes/viajes.js"
+import mantenimientos from "./routes/mantenimientos.js"
+import prestamos from "./routes/prestamos.js"
+import combustible from "./routes/combustible.js"
+import gastos from "./routes/gastos.js"
 import { firebaseHelper } from "./helpers/firebase.js";
 import health from "./routes/health.js"
 
@@ -33,11 +37,15 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 app.use("/api/usuarios",usuarios)
-app.use("/api/mantenimiento",mantenimiento)
-app.use("/api/postvuelos",postvuelos)
-app.use("/api/prevuelos",prevuelos)
-app.use("/api/pilotos",pilotos)
+app.use("/api/mantenimientos",mantenimientos)
+app.use("/api/vehiculos",vehiculos)
+app.use("/api/clientes",clientes)
 app.use("/api/solicitudes",solicitudes)
+app.use("/api/preoperacionales",preoperacionales)
+app.use("/api/prestamos",prestamos)
+app.use("/api/viajes",viajes)
+app.use("/api/combustible",combustible)
+app.use("/api/gastos",gastos)
 app.use("/api/health", health)
 
 const PORT = process.env.PORT || 4000;

@@ -1,12 +1,12 @@
-import { solicitudHelper } from '../helpers/solicitudes.js';
+import { mantenimientoHelper } from '../helpers/mantenimientos.js';
 import { vehiculoHelper } from '../helpers/vehiculos.js';
 
-const httpSolicitudes = {
+const httpMantenimientos = {
 
-crearSolicitud: async (req, res) => {
+crearMantenimiento: async (req, res) => {
   try {
     const { email, nombre, perfil, placa_asignada } = req.usuariobdtoken;
-    const { placa, tipo_mantenimiento, descripcion, odometro} = req.body;
+    const { placa, tipo_mantenimiento, descripcion, valor_mantenimiento, odometro} = req.body;
 
      let placaFinal;
     
@@ -63,13 +63,14 @@ crearSolicitud: async (req, res) => {
     let consecutivo;
 
     if (req.files && req.files.length > 0) {
-      consecutivo = await solicitudHelper.getSiguienteConsecutivo();
-      Link = await solicitudHelper.procesarArchivos(req.files, consecutivo);
+      consecutivo = await mantenimientoHelper.getSiguienteConsecutivo();
+      Link = await mantenimientoHelper.procesarArchivos(req.files, consecutivo);
 
-    const resultado = await solicitudHelper.guardarSolicitud({ 
+    const resultado = await mantenimientoHelper.guardarMantenimiento({ 
       placa: placaFinal,
       tipo_mantenimiento, 
       descripcion,
+      valor_mantenimiento,
       odometro, 
       correo_usuario: email, 
       usuario: nombre, 
@@ -82,15 +83,16 @@ crearSolicitud: async (req, res) => {
     consecutivo = resultado.consecutivo;
 
     res.status(200).json({ 
-      mensaje: 'Solicitud guardada correctamente', 
+      mensaje: 'Mantenimiento guardado correctamente', 
       consecutivo: resultado.consecutivo, 
     });
    
   }else {
-    const resultado = await solicitudHelper.guardarSolicitud({ 
+    const resultado = await mantenimientoHelper.guardarMantenimiento({ 
       placa: placaFinal,
       tipo_mantenimiento, 
       descripcion,
+      valor_mantenimiento,
       odometro, 
       correo_usuario: email, 
       usuario: nombre, 
@@ -103,7 +105,7 @@ crearSolicitud: async (req, res) => {
     consecutivo = resultado.consecutivo;
       
       res.status(200).json({ 
-        mensaje: 'Solicitud guardada correctamente', 
+        mensaje: 'Mantenimiento guardado correctamente', 
         consecutivo: resultado.consecutivo, 
       });
     }
@@ -114,13 +116,13 @@ crearSolicitud: async (req, res) => {
   } 
   },
 
-  obtenerSolicitudes: async (req, res) => {
+  obtenerMantenimientos: async (req, res) => {
     try {
-      const data = await solicitudHelper.getSolicitudes();
+      const data = await mantenimientoHelper.getMantenimientos();
       res.json(data);
     } catch (error) {
       console.error('Error al obtener datos:', error);
-      res.status(500).json({ mensaje: 'Error al obtener solicitudes' });
+      res.status(500).json({ mensaje: 'Error al obtener mantenimientos' });
     }
   },
 
@@ -136,7 +138,7 @@ obtenerResumenSolicitante: async (req, res) => {
       });
     }
 
-    const resumen = await solicitudHelper.getResumenSolicitudesPorSolicitante(email);
+    const resumen = await mantenimientoHelper.getResumenMantenimientosPorSolicitante(email);
     
     res.json({
       ok: true,
@@ -154,23 +156,45 @@ obtenerResumenSolicitante: async (req, res) => {
   }
 },
 
-obtenerSolicitudPorConsecutivo: async (req, res) => {
+obtenerMantenimientoPorConsecutivo: async (req, res) => {
   try {
     const { consecutivo } = req.params;
-    const solicitud = await solicitudHelper.getSolicitudesByConsecutivo(consecutivo);
+    const mantenimiento = await mantenimientoHelper.getMantenimientosByConsecutivo(consecutivo);
 
-    if (!solicitud) {
-      return res.status(404).json({ mensaje: 'Solicitud no encontrada' });
+    if (!mantenimiento) {
+      return res.status(404).json({ mensaje: 'Mantenimiento no encontrado' });
     }
 
-    res.json(solicitud);
+    res.json(mantenimiento);
   } catch (error) {
-    console.error('Error al obtener solicitud:', error);
-    res.status(500).json({ mensaje: 'Error al obtener solicitud' });
+    console.error('Error al obtener mantenimiento:', error);
+    res.status(500).json({ mensaje: 'Error al obtener mantenimiento' });
   }
 },
 
+editarMantenimiento: async (req, res) => {
+  try {
+    const { consecutivo } = req.params;
+    const nuevosDatos = req.body;
+    
+    if (req.files && req.files.length > 0) {
+      const Link = await mantenimientoHelper.procesarArchivos(req.files, consecutivo);
+      nuevosDatos.Link = Link;
+    }
+
+    const resultado = await mantenimientoHelper.editarMantenimientoporConsecutivo(consecutivo, nuevosDatos);
+
+    if (!resultado) {
+      return res.status(404).json({ mensaje: 'Mantenimiento no encontrado' });
+    }
+
+    res.status(200).json({ mensaje: 'Mantenimiento actualizado correctamente' });
+  } catch (error) {
+    console.error('Error al editar Mantenimiento:', error);
+    res.status(500).json({ mensaje: 'Error interno del servidor' });
+  }
+},
 
 }
 
-export default httpSolicitudes;
+export default httpMantenimientos;
