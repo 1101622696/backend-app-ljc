@@ -2,12 +2,13 @@ import { combustibleHelper } from '../helpers/combustible.js';
 import { vehiculoHelper } from '../helpers/vehiculos.js';
 
 const httpCombustible = {
+
   registrarCombustible: async (req, res) => {
     try {
       const { email, nombre, perfil, placa_asignada } = req.usuariobdtoken;
       const { placa, odometro_actual, galones_cargados, valor_pagado } = req.body;
 
-       let placaFinal;
+             let placaFinal;
           
           if (perfil === 'conductor') {
             if (!placa_asignada) {
@@ -46,7 +47,7 @@ const httpCombustible = {
             return res.status(404).json({ mensaje: 'Vehículo no encontrado con esa placa' });
           }
 
-              const odometroVigente = parseInt(vehiculo.odometro) || 0;
+      const odometroVigente = parseInt(vehiculo.odometro) || 0;
     const odometroNuevo = parseInt(odometro_actual);
     
     if (odometroNuevo < odometroVigente) {
@@ -55,10 +56,13 @@ const httpCombustible = {
       });
     }
 
+      if (!req.files || req.files.length === 0) {
+        return res.status(400).json({ mensaje: 'Debe adjuntar factura de combustible' });
+      }
+
       let link_factura = null;
       if (req.files && req.files.length > 0) {
-        const consecutivo = await combustibleHelper.getSiguienteConsecutivo();
-        link_factura = await combustibleHelper.procesarArchivos(req.files, `COMB_${consecutivo}`);
+        link_factura = await combustibleHelper.procesarArchivos(req.files, placaFinal);
       }
 
       const resultado = await combustibleHelper.registrarCombustible({
@@ -70,7 +74,6 @@ const httpCombustible = {
         usuario: nombre,
         link_factura
       });
-    await vehiculoHelper.actualizarOdometroVehiculo(placaFinal, odometro_actual);
 
       res.status(200).json({
         mensaje: resultado.mensaje,
@@ -92,7 +95,25 @@ const httpCombustible = {
       console.error('Error al listar combustibles:', error);
       res.status(500).json({ mensaje: 'Error al obtener combustibles' });
     }
+  },
+
+  legalizarCombustible: async (req, res) => {
+    try {
+      const { consecutivo } = req.params;
+      const { numero_factura } = req.body;
+
+      const resultado = await combustibleHelper.legalizarCombustible(consecutivo, numero_factura);
+
+      res.status(200).json({
+        mensaje: resultado.mensaje,
+        resumen: resultado
+      });
+    } catch (error) {
+      console.error('Error al legalizar combustible:', error);
+      res.status(500).json({ mensaje: error.message || 'Error interno del servidor' });
+    }
   }
 };
+
 
 export default httpCombustible;

@@ -5,10 +5,43 @@ const httpPreoperacionales = {
 
 crearPreoperacional: async (req, res) => {
   try {
-    const { email, nombre } = req.usuariobdtoken;
-    const { codigo_viaje, placa, odometro, nivel_agua, nivel_aceite, galones, estado_cabina, cinturon_seguridad, airbag, calibracion_frenos, panoramicos_espejos, estado_trailer, ruedas_trailer, extintor_cabina, f_vencimiento_ext_c, extintor_trailer, f_vencimiento_ext_t, senalizacion, kit_carretera, direccionales, botiquin, cintas_reflectivas, senalizacion_conduzco, estado_bandas, ruedas_cabezote, correas, aire_acondicionado, estado_carpa, refrigerante, pito, alarma_retroceso, luces, cierre_puertas_capot, bateria, placas_visibles } = req.body;
+    const { email, nombre, perfil, placa_asignada } = req.usuariobdtoken;
+    const { codigo_viaje, odometro, nivel_agua, nivel_aceite, galones, fugas_visibles, presion_frenos, fugas_audibles, freno_parqueo, abs_sintestigo, prueba_freno, luces_altas_bajas, direccionales, luces_freno, luces_remolque, testigo_tablero, filtro_aire, volante, sin_fugas, cambios_suave, sin_ruidos, cinturon_seguridad, espejos, extintor_cabezote, extintor_trailer, botiquin, triangulos_reflectivos, kit_carretera, senalizacion_conduzco, correas, estado_carpa, refrigerante, pito, alarma_retroceso, presion_llantas, desgaste_llantas, tuercas_ajustadas, suspension_fisuras, acople_quintarueda, quinta_rueda, pasador_rey, mangueras_aire, seguro_acople, placas_visibles} = req.body;
 
-    const vehiculo = await vehiculoHelper.getVehiculoById(placa);
+     let placaFinal;
+    
+    if (perfil === 'conductor') {
+      if (!placa_asignada) {
+        return res.status(400).json({ mensaje: 'No tienes una placa asignada' });
+      }
+      placaFinal = placa_asignada;
+      
+    } else if (perfil === 'propietario') {
+      if (!placa_asignada) {
+        return res.status(400).json({ mensaje: 'No tienes placas asignadas' });
+      }
+      
+      const placasPermitidas = placa_asignada.split(',').map(p => p.trim().toLowerCase());
+      
+      if (!placa || !placasPermitidas.includes(placa.toLowerCase())) {
+        return res.status(400).json({ 
+          mensaje: 'Placa no válida. Tus placas asignadas son: ' + placa_asignada 
+        });
+      }
+      
+      placaFinal = placa;
+      
+    } else if (perfil === 'administrador') {
+      if (!placa) {
+        return res.status(400).json({ mensaje: 'Debes especificar una placa' });
+      }
+      placaFinal = placa;
+      
+    } else {
+      return res.status(403).json({ mensaje: 'Perfil no autorizado para crear viajes' });
+    }
+    
+    const vehiculo = await vehiculoHelper.getVehiculoById(placaFinal);
     
     if (!vehiculo) {
       return res.status(404).json({ mensaje: 'Vehículo no encontrado con esa placa' });
@@ -30,56 +63,123 @@ crearPreoperacional: async (req, res) => {
     if (req.files && req.files.length > 0) {
       consecutivo = await preoperacionalHelper.getSiguienteConsecutivo();
       Link = await preoperacionalHelper.procesarArchivos(req.files, consecutivo);
-    }
 
     const resultado = await preoperacionalHelper.guardarPreoperacional({ 
       codigo_viaje, 
-      placa,
-      odometro, 
+      placa: placaFinal,
+      odometro,
       nivel_agua, 
       nivel_aceite, 
       galones, 
-      estado_cabina, 
-      cinturon_seguridad, 
-      airbag, 
-      calibracion_frenos, 
-      panoramicos_espejos, 
-      estado_trailer, 
-      ruedas_trailer, 
-      extintor_cabina, 
-      f_vencimiento_ext_c, 
-      extintor_trailer, 
-      f_vencimiento_ext_t, 
-      senalizacion, 
-      kit_carretera, 
+      fugas_visibles, 
+      presion_frenos, 
+      fugas_audibles, 
+      freno_parqueo, 
+      abs_sintestigo, 
+      prueba_freno, 
+      luces_altas_bajas, 
       direccionales, 
+      luces_freno, 
+      luces_remolque, 
+      testigo_tablero, 
+      filtro_aire, 
+      volante, 
+      sin_fugas, 
+      cambios_suave, 
+      sin_ruidos, 
+      cinturon_seguridad, 
+      espejos, 
+      extintor_cabezote, 
+      extintor_trailer, 
       botiquin, 
-      cintas_reflectivas, 
+      triangulos_reflectivos, 
+      kit_carretera, 
       senalizacion_conduzco, 
-      estado_bandas,
-      ruedas_cabezote,
-      correas,
-      aire_acondicionado,
-      estado_carpa,
-      refrigerante,
-      pito,
-      alarma_retroceso,
-      luces,
-      cierre_puertas_capot,
-      bateria,
+      correas, 
+      estado_carpa, 
+      refrigerante, 
+      pito, 
+      alarma_retroceso, 
+      presion_llantas, 
+      desgaste_llantas, 
+      tuercas_ajustadas, 
+      suspension_fisuras, 
+      acople_quintarueda, 
+      quinta_rueda, 
+      pasador_rey, 
+      mangueras_aire, 
+      seguro_acople, 
       placas_visibles,
-      Link, 
       correo_usuario: email, 
       usuario: nombre, 
-      fecha_creacion 
+      fecha_creacion,
+      Link, 
     });
-   
-    await vehiculoHelper.actualizarOdometroVehiculo(placa, odometro);
-
+      
     res.status(200).json({ 
       mensaje: 'Preoperacional guardado correctamente', 
       consecutivo: resultado.consecutivo, 
     });
+
+  } else {
+        const resultado = await preoperacionalHelper.guardarPreoperacional({ 
+      codigo_viaje, 
+      placa: placaFinal,
+      odometro,
+      nivel_agua, 
+      nivel_aceite, 
+      galones, 
+      fugas_visibles, 
+      presion_frenos, 
+      fugas_audibles, 
+      freno_parqueo, 
+      abs_sintestigo, 
+      prueba_freno, 
+      luces_altas_bajas, 
+      direccionales, 
+      luces_freno, 
+      luces_remolque, 
+      testigo_tablero, 
+      filtro_aire, 
+      volante, 
+      sin_fugas, 
+      cambios_suave, 
+      sin_ruidos, 
+      cinturon_seguridad, 
+      espejos, 
+      extintor_cabezote, 
+      extintor_trailer, 
+      botiquin, 
+      triangulos_reflectivos, 
+      kit_carretera, 
+      senalizacion_conduzco, 
+      correas, 
+      estado_carpa, 
+      refrigerante, 
+      pito, 
+      alarma_retroceso, 
+      presion_llantas, 
+      desgaste_llantas, 
+      tuercas_ajustadas, 
+      suspension_fisuras, 
+      acople_quintarueda, 
+      quinta_rueda, 
+      pasador_rey, 
+      mangueras_aire, 
+      seguro_acople, 
+      placas_visibles,
+      correo_usuario: email, 
+      usuario: nombre, 
+      fecha_creacion, 
+      Link: null, 
+    });
+      
+    res.status(200).json({ 
+      mensaje: 'Preoperacional guardado correctamente sin archivos', 
+      consecutivo: resultado.consecutivo, 
+    });
+  }
+    await vehiculoHelper.actualizarOdometroVehiculo(placaFinal, odometro);
 
   } catch (error) { 
     console.error('Error al guardar el preoperacional:', error); 
@@ -147,7 +247,6 @@ editarPreoperacional: async (req, res) => {
   try {
     const { consecutivo } = req.params;
     const nuevosDatos = req.body;
-    const { email, nombre } = req.usuariobdtoken;
     
     // Procesar archivos si se han enviado
     if (req.files && req.files.length > 0) {

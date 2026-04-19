@@ -12,16 +12,18 @@ router.get('/obtenerdatosviajes/:consecutivo',[validarJWT], httpViajes.obtenerVi
 router.get('/calcular-nomina/:email', [validarJWT], httpViajes.calcularNomina);
 router.get('/resumen-solicitante', [validarJWT], httpViajes.obtenerResumenSolicitante); 
 router.get('/facturar-cliente/:codigoCliente', [validarJWT], httpViajes.facturarCliente);
+router.get('/gastos/:consecutivo', [validarJWT], httpViajes.obtenerGastosViaje);
 
 router.post('/crear', [validarJWT], httpViajes.crearViaje);
 router.post('/aprobar-nomina/:email', [validarJWT], httpViajes.aprobarNomina);
 router.post('/pagar-salario/:email', [validarJWT], httpViajes.pagarSalarioMensual);
 
 router.put("/editar/:consecutivo",[validarJWT, upload.array('archivos')], httpViajes.editarViaje)
-router.put('/cerrar-conductor/:consecutivo', [validarJWT], httpViajes.cerrarViajeYGastosConductor);
-router.put('/aprobar-propietario/:consecutivo', [validarJWT], httpViajes.aprobarViajeYGastosPropietario);
+router.put('/cerrar-conductor/:consecutivo', [validarJWT, upload.any()], httpViajes.cerrarViajeYGastosConductor);
+router.put('/aprobar-propietario/:consecutivo', [validarJWT, upload.any()], httpViajes.aprobarViajeYGastosPropietario);
 router.put('/completar-saldo/:consecutivo', [validarJWT], httpViajes.completarSaldoCliente);
 router.put('/facturar/:consecutivo', [validarJWT], httpViajes.facturarViaje);
+router.put('/legalizar-factura/:consecutivo', [validarJWT], httpViajes.legalizarFactura);
 
 
 export default router

@@ -80,13 +80,15 @@ crearVehiculo: async (req, res) => {
       }
     }
     
+        const rendimiento_galon = 8;
         let Link = null;
+
         if (req.files && req.files.length > 0) {
           // Primero obtener la placa para usarlo como nombre de la carpeta
           const placafoldername = placa;
           Link = await vehiculoHelper.procesarArchivos(req.files, placafoldername);
       
-    const resultado = await vehiculoHelper.guardarVehiculo({ placa, viajes, licencia, marca, modelo, referencia, odometro, clase_vehiculo, color, servicio, capacidad, combustible, numero_motor, numero_chasis, fecha_matricula, soat, soat_expedicion, soat_vencimiento, capacidad_ton, tecnico, tecnico_expedicion, tecnico_vencimiento, poliza, poliza_expedicion, poliza_vencimiento, Link, estado, fecha_creacion });
+    const resultado = await vehiculoHelper.guardarVehiculo({ placa, viajes, licencia, marca, modelo, referencia, odometro, clase_vehiculo, color, servicio, capacidad, combustible, numero_motor, numero_chasis, fecha_matricula, soat, soat_expedicion, soat_vencimiento, capacidad_ton, tecnico, tecnico_expedicion, tecnico_vencimiento, poliza, poliza_expedicion, poliza_vencimiento, Link, estado, fecha_creacion, rendimiento_galon });
   
       res.status(200).json({
         mensaje: 'vehiculo guardado  con link correctamente',
@@ -122,7 +124,8 @@ crearVehiculo: async (req, res) => {
       poliza_vencimiento,
       Link: null,
       estado, 
-      fecha_creacion
+      fecha_creacion,
+      rendimiento_galon
     
     });
     

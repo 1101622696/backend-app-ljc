@@ -7,7 +7,6 @@ const router=Router()
 
 const upload = multer({ storage: multer.memoryStorage() });
 
-
 router.get("/",[validarJWT],httpVehiculos.obtenerVehiculos)
 router.get("/activos",[validarJWT],httpVehiculos.obtenerVehiculosActivos)
 router.get("/inactivos",[validarJWT],httpVehiculos.obtenerVehiculosInactivos)

@@ -1,44 +1,11 @@
-import { google } from 'googleapis';
 import stream from 'stream';
+import { getDriveClient, getSheetsClient } from '../services/google.js';
 
-const spreadsheetId = '1UtSm_ZBiNWt2njncuJ5PSHreMbj3InG9gyXapqVUBEQ';
-
-const getAuth = () => {
-  if (process.env.GOOGLE_CLIENT_EMAIL && process.env.GOOGLE_PRIVATE_KEY) {
-    return new google.auth.GoogleAuth({
-      credentials: {
-        client_email: process.env.GOOGLE_CLIENT_EMAIL,
-        private_key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
-      },
-      scopes: [
-        'https://www.googleapis.com/auth/spreadsheets',
-        'https://www.googleapis.com/auth/drive'
-      ],
-    });
-  } else {
-    return new google.auth.GoogleAuth({
-      keyFile: './config/credenciales-sheets.json',
-      scopes: [
-        'https://www.googleapis.com/auth/spreadsheets',
-        'https://www.googleapis.com/auth/drive'
-      ],
-    });
-  }
-};
-
-const getSheetsClient = async () => {
-  const authClient = getAuth();
-  const client = await authClient.getClient();
-  return google.sheets({ version: 'v4', auth: client });
-};
-const getDriveClient = async () => {
-  const authClient = getAuth();
-  const client = await authClient.getClient();
-  return google.drive({ version: 'v3', auth: client });
-};
+const spreadsheetId = process.env.SPREADSHEET_ID;
+const carpetaPadreId = process.env.CARPETA_PADRE_ID_VEHICULOS;
 
 const obtenerDatosVehiculo = async () => {
-  const sheets = await getSheetsClient();
+  const sheets = getSheetsClient();
   
   const range = 'Vehiculos!A1:AC100'; 
 
@@ -58,10 +25,10 @@ const obtenerDatosVehiculo = async () => {
 
 const getVehiculos = () => obtenerDatosVehiculo();
 
-const guardarVehiculo = async ({ placa, viajes, licencia, marca, modelo, referencia, odometro, clase_vehiculo, color, servicio, capacidad, combustible, numero_motor, numero_chasis, fecha_matricula, soat, soat_expedicion, soat_vencimiento, capacidad_ton, tecnico, tecnico_expedicion, tecnico_vencimiento, poliza, poliza_expedicion, poliza_vencimiento, Link, estado, fecha_creacion }) => {
-  const sheets = await getSheetsClient();
+const guardarVehiculo = async ({ placa, viajes, licencia, marca, modelo, referencia, odometro, clase_vehiculo, color, servicio, capacidad, combustible, numero_motor, numero_chasis, fecha_matricula, soat, soat_expedicion, soat_vencimiento, capacidad_ton, tecnico, tecnico_expedicion, tecnico_vencimiento, poliza, poliza_expedicion, poliza_vencimiento, Link, estado, fecha_creacion, rendimiento_galon }) => {
+  const sheets = getSheetsClient();
 
-  const nuevaFila = [placa, viajes, licencia, marca, modelo, referencia, odometro, clase_vehiculo, color, servicio, capacidad, combustible, numero_motor, numero_chasis, fecha_matricula, soat, soat_expedicion, soat_vencimiento, capacidad_ton, tecnico, tecnico_expedicion, tecnico_vencimiento, poliza, poliza_expedicion, poliza_vencimiento, Link, estado, fecha_creacion];
+  const nuevaFila = [placa, viajes, licencia, marca, modelo, referencia, odometro, clase_vehiculo, color, servicio, capacidad, combustible, numero_motor, numero_chasis, fecha_matricula, soat, soat_expedicion, soat_vencimiento, capacidad_ton, tecnico, tecnico_expedicion, tecnico_vencimiento, poliza, poliza_expedicion, poliza_vencimiento, Link, estado, fecha_creacion, rendimiento_galon];
 
   await sheets.spreadsheets.values.append({
     spreadsheetId,
@@ -73,12 +40,14 @@ const guardarVehiculo = async ({ placa, viajes, licencia, marca, modelo, referen
 
   return { placa };
 };
+
 const getVehiculoByStatus = async (status) => {
   const vehiculos = await getVehiculos();
   return vehiculos.filter(vehiculo => 
     vehiculo.estado && vehiculo.estado.toLowerCase() === status.toLowerCase()
   );
 };
+
 const getVehiculoById = async (placa) => {
   const vehiculos = await getVehiculos();
   return vehiculos.find(vehiculo => 
@@ -150,7 +119,7 @@ const getVehiculoOrdenadosPorDistancia = async (orden = 'desc') => {
 };
 
 const editarVehiculoporPlaca = async (placa, nuevosDatos) => {
-  const sheets = await getSheetsClient();
+  const sheets = getSheetsClient();
 
   const response = await sheets.spreadsheets.values.get({
     spreadsheetId,
@@ -193,9 +162,10 @@ const editarVehiculoporPlaca = async (placa, nuevosDatos) => {
   nuevosDatos.poliza || filaActual[25], 
   nuevosDatos.poliza_expedicion || filaActual[23],
   nuevosDatos.poliza_vencimiento || filaActual[24], 
-  nuevosDatos.Link || filaActual[22],
+  nuevosDatos.link || filaActual[25],
   filaActual[26], 
   filaActual[27], 
+  filaActual[28], 
 ];
 
   const filaEnHoja = filaIndex + 2; 
@@ -213,7 +183,7 @@ const editarVehiculoporPlaca = async (placa, nuevosDatos) => {
 };
 
 const crearCarpeta = async (nombreCarpeta, parentFolderId) => {
-  const drive = await getDriveClient();
+  const drive = getDriveClient();
   
   const fileMetadata = {
     name: nombreCarpeta,
@@ -231,7 +201,7 @@ const crearCarpeta = async (nombreCarpeta, parentFolderId) => {
 
 const subirArchivo = async (archivo, carpetaId) => {
   try {
-    const drive = await getDriveClient();
+    const drive = getDriveClient();
 
     const fileMetadata = {
       name: archivo.originalname,
@@ -263,9 +233,7 @@ const procesarArchivos = async (archivos, placafoldername) => {
   if (!archivos || archivos.length === 0) {
     return null;
   }
-  
-  const carpetaPadreId = '1xD1GpMzuzb5qi0t2VpXUASJbQTvtnP1A';
-  
+    
   let carpeta = await buscarCarpetaPorNombre(placafoldername, carpetaPadreId);
   
     if (!carpeta) {
@@ -283,7 +251,7 @@ const procesarArchivos = async (archivos, placafoldername) => {
 
 const actualizarEstadoEnSheets = async (placa, nuevoEstado = "activo") => {
   try {
-    const sheets = await getSheetsClient();
+    const sheets = getSheetsClient();
     
     // Primero, obtener todos los datos para encontrar la fila del placa
     const response = await sheets.spreadsheets.values.get({
@@ -348,6 +316,7 @@ function getColumnLetter(columnNumber) {
   }
   return columnLetter;
 }
+
 const subirArchivosACarpetaExistente = async (archivos, carpetaId) => {
   if (!archivos || archivos.length === 0) {
     return null;
@@ -361,7 +330,7 @@ const subirArchivosACarpetaExistente = async (archivos, carpetaId) => {
   }
   
   // Devolver el enlace a la carpeta (necesitamos obtenerlo)
-  const drive = await getDriveClient();
+  const drive = getDriveClient();
   const carpeta = await drive.files.get({
     fileId: carpetaId,
     fields: 'webViewLink'
@@ -371,7 +340,7 @@ const subirArchivosACarpetaExistente = async (archivos, carpetaId) => {
 };
 
 const buscarCarpetaPorNombre = async (nombreCarpeta, parentFolderId) => {
-  const drive = await getDriveClient();
+  const drive = getDriveClient();
   
   // Crear consulta para buscar por nombre exacto dentro de la carpeta padre
   let query = `name = '${nombreCarpeta}' and mimeType = 'application/vnd.google-apps.folder'`;
@@ -389,7 +358,7 @@ const buscarCarpetaPorNombre = async (nombreCarpeta, parentFolderId) => {
 };
 
 const actualizarOdometroVehiculo = async (placa, nuevoOdometro) => {
-  const sheets = await getSheetsClient();
+  const sheets = getSheetsClient();
 
   const response = await sheets.spreadsheets.values.get({
     spreadsheetId,

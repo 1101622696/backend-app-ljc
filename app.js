@@ -12,6 +12,7 @@ import mantenimientos from "./routes/mantenimientos.js"
 import prestamos from "./routes/prestamos.js"
 import combustible from "./routes/combustible.js"
 import gastos from "./routes/gastos.js"
+import resumenvehiculo from "./routes/resumen_vehiculo.js"
 import { firebaseHelper } from "./helpers/firebase.js";
 import health from "./routes/health.js"
 
@@ -46,6 +47,7 @@ app.use("/api/prestamos",prestamos)
 app.use("/api/viajes",viajes)
 app.use("/api/combustible",combustible)
 app.use("/api/gastos",gastos)
+app.use("/api/resumenvehiculo",resumenvehiculo)
 app.use("/api/health", health)
 
 const PORT = process.env.PORT || 4000;

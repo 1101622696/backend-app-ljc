@@ -64,6 +64,7 @@ crearPrestamo: async (req, res) => {
     try {
       const data = await prestamoHelper.getPrestamos();
       res.json(data);
+      
     } catch (error) {
       console.error('Error al obtener datos:', error);
       res.status(500).json({ mensaje: 'Error al obtener prestamos' });

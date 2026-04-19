@@ -49,6 +49,11 @@ crearViaje: async (req, res) => {
 
     const fecha_creacion = new Date().toISOString().split('T')[0];
     
+    // Determinar estado preoperacional (cada 3 viajes por placa)
+ const viajesAnteriores = await viajeHelper.contarViajesPorPlaca(placaFinal);
+ const numeroViaje = viajesAnteriores + 1; // este será el nuevo viaje
+ const estadoPreoperacional = (numeroViaje % 2 === 1) ? 'se debe' : 'no se debe';
+
     const resultado = await viajeHelper.guardarAnticipo({ 
       placa: placaFinal,
       cliente, 
@@ -58,7 +63,8 @@ crearViaje: async (req, res) => {
       valor_tonelada_inicial,
       correo_usuario: email, 
       usuario: nombre, 
-      fecha_creacion 
+      fecha_creacion,
+      estado_preoperacional: estadoPreoperacional,
     });
    
     res.status(200).json({ 
@@ -131,12 +137,24 @@ obtenerViajePorConsecutivo: async (req, res) => {
 cerrarViajeYGastosConductor: async (req, res) => {
   try {
     const { consecutivo } = req.params;
-    const resultado = await viajeHelper.cerrarViajeYGastosConductor(consecutivo, req.body);
+    
+    // Organizar archivos por fieldname
+    const archivosOrganizados = {};
+    if (req.files && req.files.length > 0) {
+      req.files.forEach(file => {
+        if (!archivosOrganizados[file.fieldname]) {
+          archivosOrganizados[file.fieldname] = [];
+        }
+        archivosOrganizados[file.fieldname].push(file);
+      });
+    }
+    
+    const resultado = await viajeHelper.cerrarViajeYGastosConductor(consecutivo, req.body, archivosOrganizados);
     if (!resultado) return res.status(404).json({ mensaje: 'Viaje no encontrado' });
     res.status(200).json({ mensaje: 'Viaje cerrado correctamente', resumen: resultado });
   } catch (error) {
     console.error('Error al cerrar viaje:', error);
-    res.status(500).json({ mensaje: 'Error interno del servidor' });
+    res.status(500).json({ mensaje: error.message || 'Error interno del servidor' });
   }
 },
 
@@ -172,7 +190,10 @@ aprobarNomina: async (req, res) => {
     res.status(200).json({ ok: true, mensaje: 'Nómina aprobada y liquidada', resultado });
   } catch (error) {
     console.error('Error al aprobar nómina:', error);
-    res.status(500).json({ mensaje: 'Error interno del servidor' });
+    res.status(400).json({ 
+    ok: false,
+    mensaje: error.message 
+  });
   }
 },
 
@@ -202,14 +223,29 @@ pagarSalarioMensual: async (req, res) => {
     res.status(200).json({ ok: true, mensaje: 'Salario mensual pagado', resultado });
   } catch (error) {
     console.error('Error al pagar salario:', error);
-    res.status(500).json({ mensaje: error.message });
+    res.status(400).json({ 
+    ok: false,
+    mensaje: error.message 
+  });
   }
 },
 
 aprobarViajeYGastosPropietario: async (req, res) => {
   try {
     const { consecutivo } = req.params;
-    const resultado = await viajeHelper.aprobarViajeYGastosPropietario(consecutivo, req.body);
+    
+    // Organizar archivos por fieldname
+    const archivosOrganizados = {};
+    if (req.files && req.files.length > 0) {
+      req.files.forEach(file => {
+        if (!archivosOrganizados[file.fieldname]) {
+          archivosOrganizados[file.fieldname] = [];
+        }
+        archivosOrganizados[file.fieldname].push(file);
+      });
+    }
+    
+    const resultado = await viajeHelper.aprobarViajeYGastosPropietario(consecutivo, req.body, archivosOrganizados);
     if (!resultado) return res.status(404).json({ mensaje: 'Viaje no encontrado' });
     res.status(200).json({ mensaje: 'Viaje aprobado correctamente', resumen: resultado });
   } catch (error) {
@@ -232,13 +268,18 @@ facturarCliente: async (req, res) => {
 facturarViaje: async (req, res) => {
   try {
     const { consecutivo } = req.params;
-    const { valor_viaje_real } = req.body;
+    const { valor_viaje_real, notas_facturacion, num_factura_cliente } = req.body;
     
     if (!valor_viaje_real) {
       return res.status(400).json({ mensaje: 'Debe especificar el valor_viaje_real' });
     }
 
-    const resultado = await viajeHelper.facturarViaje(consecutivo, parseFloat(valor_viaje_real));
+    const resultado = await viajeHelper.facturarViaje(
+      consecutivo, 
+      parseFloat(valor_viaje_real),
+      notas_facturacion,
+      num_factura_cliente
+    );
     
     if (!resultado) {
       return res.status(404).json({ mensaje: 'Viaje no encontrado' });
@@ -251,6 +292,44 @@ facturarViaje: async (req, res) => {
   } catch (error) {
     console.error('Error al facturar viaje:', error);
     res.status(500).json({ mensaje: error.message || 'Error interno del servidor' });
+  }
+},
+
+legalizarFactura: async (req, res) => {
+  try {
+    const { consecutivo } = req.params;
+    const { tipo_gasto, quien, numero_factura } = req.body;
+    
+    if (!tipo_gasto || !quien) {
+      return res.status(400).json({ mensaje: 'Debe especificar tipo_gasto y quien' });
+    }
+
+    const resultado = await detalleGastosViajesHelper.legalizarFacturaIndividual(
+      consecutivo,
+      tipo_gasto,
+      quien,
+      numero_factura
+    );
+    
+    if (!resultado) {
+      return res.status(404).json({ mensaje: 'Gasto no encontrado' });
+    }
+
+    res.status(200).json({ mensaje: 'Factura legalizada correctamente' });
+  } catch (error) {
+    console.error('Error al legalizar factura:', error);
+    res.status(500).json({ mensaje: error.message || 'Error interno del servidor' });
+  }
+},
+
+obtenerGastosViaje: async (req, res) => {
+  try {
+    const { consecutivo } = req.params;
+    const gastos = await detalleGastosViajesHelper.getGastosViaje(consecutivo);
+    res.json(gastos);
+  } catch (error) {
+    console.error('Error al obtener gastos:', error);
+    res.status(500).json({ mensaje: 'Error interno del servidor' });
   }
 },
 

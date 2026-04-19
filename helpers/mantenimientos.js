@@ -1,45 +1,11 @@
-import { google } from 'googleapis';
 import stream from 'stream';
+import { getDriveClient, getSheetsClient } from '../services/google.js';
 
-const spreadsheetId = '1UtSm_ZBiNWt2njncuJ5PSHreMbj3InG9gyXapqVUBEQ';
-
-const getAuth = () => {
-  if (process.env.GOOGLE_CLIENT_EMAIL && process.env.GOOGLE_PRIVATE_KEY) {
-    return new google.auth.GoogleAuth({
-      credentials: {
-        client_email: process.env.GOOGLE_CLIENT_EMAIL,
-        private_key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
-      },
-      scopes: [
-        'https://www.googleapis.com/auth/spreadsheets',
-        'https://www.googleapis.com/auth/drive'
-      ],
-    });
-  } else {
-    return new google.auth.GoogleAuth({
-      keyFile: './config/credenciales-sheets.json',
-      scopes: [
-        'https://www.googleapis.com/auth/spreadsheets',
-        'https://www.googleapis.com/auth/drive'
-      ],
-    });
-  }
-};
-
-const getSheetsClient = async () => {
-  const authClient = getAuth();
-  const client = await authClient.getClient();
-  return google.sheets({ version: 'v4', auth: client });
-};
-
-const getDriveClient = async () => {
-  const authClient = getAuth();
-  const client = await authClient.getClient();
-  return google.drive({ version: 'v3', auth: client });
-};
+const spreadsheetId = process.env.SPREADSHEET_ID;
+const carpetaPadreId = process.env.CARPETA_PADRE_ID_MANTENIMIENTOS;
 
 const obtenerDatosMantenimiento = async (nombreHoja, rango = 'A1:J1000') => {
-  const sheets = await getSheetsClient();
+  const sheets = getSheetsClient();
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId,
     range: `${nombreHoja}!${rango}`,
@@ -78,7 +44,7 @@ const getSiguienteConsecutivo = async () => {
 };
 
 const guardarMantenimiento = async ({ placa, tipo_mantenimiento, descripcion, valor_mantenimiento, odometro, correo_usuario, usuario, fecha_creacion, Link}) => {
-  const sheets = await getSheetsClient();
+  const sheets = getSheetsClient();
   const consecutivo = await getSiguienteConsecutivo();
  
   const nuevaFila = [consecutivo, placa, tipo_mantenimiento, descripcion, valor_mantenimiento, odometro, correo_usuario , usuario , fecha_creacion, Link];
@@ -133,7 +99,7 @@ const getResumenMantenimientosPorSolicitante = async (email) => {
 };
 
 const editarMantenimientoporConsecutivo = async (consecutivo, nuevosDatos) => {
-  const sheets = await getSheetsClient();
+  const sheets = getSheetsClient();
 
   const response = await sheets.spreadsheets.values.get({
     spreadsheetId,
@@ -178,7 +144,7 @@ const editarMantenimientoporConsecutivo = async (consecutivo, nuevosDatos) => {
 };
 
 const crearCarpeta = async (nombreCarpeta, parentFolderId) => {
-  const drive = await getDriveClient();
+  const drive = getDriveClient();
   
   const fileMetadata = {
     name: nombreCarpeta,
@@ -195,7 +161,7 @@ const crearCarpeta = async (nombreCarpeta, parentFolderId) => {
 };
 
 const subirArchivo = async (archivo, carpetaId) => {
-  const drive = await getDriveClient();
+  const drive = getDriveClient();
   
   const fileMetadata = {
     name: archivo.originalname,
@@ -223,9 +189,7 @@ const procesarArchivos = async (archivos, consecutivo) => {
   if (!archivos || archivos.length === 0) {
     return null;
   }
-  
-  const carpetaPadreId = '1pRUDMsCXZv3T_E_aloHqwjRvMt3DM4Fn';
-  
+    
   let carpeta = await buscarCarpetaPorNombre(consecutivo, carpetaPadreId);
   
   if (!carpeta) {
@@ -254,7 +218,7 @@ const subirArchivosACarpetaExistente = async (archivos, carpetaId) => {
   }
   
   // Devolver el enlace a la carpeta (necesitamos obtenerlo)
-  const drive = await getDriveClient();
+  const drive = getDriveClient();
   const carpeta = await drive.files.get({
     fileId: carpetaId,
     fields: 'webViewLink'
@@ -264,7 +228,7 @@ const subirArchivosACarpetaExistente = async (archivos, carpetaId) => {
 };
 
 const buscarCarpetaPorNombre = async (nombreCarpeta, parentFolderId) => {
-  const drive = await getDriveClient();
+  const drive = getDriveClient();
   
   // Crear consulta para buscar por nombre exacto dentro de la carpeta padre
   let query = `name = '${nombreCarpeta}' and mimeType = 'application/vnd.google-apps.folder'`;

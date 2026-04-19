@@ -1,49 +1,16 @@
-import { google } from 'googleapis';
 import stream from 'stream';
+import { getDriveClient, getSheetsClient } from '../services/google.js';
 import { usuarioHelper } from '../helpers/usuarios.js';
 import { clienteHelper } from '../helpers/clientes.js';
 import { prestamoHelper } from '../helpers/prestamos.js';
 import { gastosVehiculoHelper } from '../helpers/gastos.js';
+import { detalleGastosViajesHelper } from '../helpers/detalles_gastos.js';
 
-const spreadsheetId = '1UtSm_ZBiNWt2njncuJ5PSHreMbj3InG9gyXapqVUBEQ';
-
-const getAuth = () => {
-  if (process.env.GOOGLE_CLIENT_EMAIL && process.env.GOOGLE_PRIVATE_KEY) {
-    return new google.auth.GoogleAuth({
-      credentials: {
-        client_email: process.env.GOOGLE_CLIENT_EMAIL,
-        private_key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
-      },
-      scopes: [
-        'https://www.googleapis.com/auth/spreadsheets',
-        'https://www.googleapis.com/auth/drive'
-      ],
-    });
-  } else {
-    return new google.auth.GoogleAuth({
-      keyFile: './config/credenciales-sheets.json',
-      scopes: [
-        'https://www.googleapis.com/auth/spreadsheets',
-        'https://www.googleapis.com/auth/drive'
-      ],
-    });
-  }
-};
-
-const getSheetsClient = async () => {
-  const authClient = getAuth();
-  const client = await authClient.getClient();
-  return google.sheets({ version: 'v4', auth: client });
-};
-
-const getDriveClient = async () => {
-  const authClient = getAuth();
-  const client = await authClient.getClient();
-  return google.drive({ version: 'v3', auth: client });
-};
+const spreadsheetId = process.env.SPREADSHEET_ID;
+const carpetaPadreId = process.env.CARPETA_PADRE_ID_VIAJES;
 
 const obtenerDatosViaje = async (nombreHoja, rango = 'A1:BB1000') => {
-  const sheets = await getSheetsClient();
+  const sheets = getSheetsClient();
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId,
     range: `${nombreHoja}!${rango}`,
@@ -81,10 +48,11 @@ const getSiguienteConsecutivo = async () => {
   return `V-${numero + 1}`;
 };
 
-const guardarAnticipo = async ({ placa, cliente, destino, fecha_inicio, valor_anticipo_conductor, valor_tonelada_inicial, correo_usuario, usuario, fecha_creacion }) => {
-  const sheets = await getSheetsClient();
+const guardarAnticipo = async ({ placa, cliente, destino, fecha_inicio, valor_anticipo_conductor, valor_tonelada_inicial, correo_usuario, usuario, fecha_creacion, estado_preoperacional  }) => {
+  const sheets = getSheetsClient();
   const consecutivo = await getSiguienteConsecutivo();
 
+  // 39 columnas A hasta AM
   const nuevaFila = [
     consecutivo,                    // A
     placa,                          // B
@@ -101,48 +69,31 @@ const guardarAnticipo = async ({ placa, cliente, destino, fecha_inicio, valor_an
     '',                             // M - valor_viaje_estimado
     '',                             // N - valor_viaje_real
     '',                             // O - diferencia_facturacion
-    '',                             // P - toneladas_inicio
-    '',                             // Q - toneladas_descargue
-    '',                             // R - diferencia_kg
-    valor_tonelada_inicial,         // S
-    '',                             // T - valor_tonelada_final
-    '',                             // U - diez_pcto
-    valor_anticipo_conductor,       // V
-    '',                             // W - saldo_anticipo_conductor
-    '',                             // X - total_gastos_conductor
-    '',                             // Y - saldo_pendiente_conductor
-    '',                             // Z - fecha_fin_viaje
-    '',                             // AA - cant_peajes_conductor
-    '',                             // AB - valor_total_peajes_conductor
-    '',                             // AC - valor_cargue_conductor
-    '',                             // AD - valor_descargue_conductor
-    '',                             // AE - engrase_conductor
-    '',                             // AF - parqueadero_conductor
-    '',                             // AG - fumigacion_conductor
-    '',                             // AH - lavadas_conductor
-    '',                             // AI - comision_despachador_conductor
-    '',                             // AJ - otro_conductor
-    '',                             // AK - valor_otro_conductor
-    '',                             // AL - cant_peajes_propietario
-    '',                             // AM - valor_total_peajes_propietario
-    '',                             // AN - valor_cargue_propietario
-    '',                             // AO - valor_descargue_propietario
-    '',                             // AP - engrase_propietario
-    '',                             // AQ - parqueadero_propietario
-    '',                             // AR - fumigacion_propietario
-    '',                             // AS - lavadas_propietario
-    '',                             // AT - comision_despachador_propietario
-    '',                             // AU - otro_propietario
-    '',                             // AV - valor_otro_propietario
-    '',                             // AW - total_gastos_propietario
-    '',                             // AX - ganancia_viaje_estimada
-    '',                             // AY - ganancia_viaje_real
-    '',                             // AZ - url_descargue
-    correo_usuario,                 // BA
-    usuario,                        // BB
-    fecha_creacion,                 // BC
-    'solicitado',                   // BD - estado_viaje
-    'no',                           // BE - liquidado
+    '',                             // P - notas_facturacion
+    '',                             // Q - num_factura_cliente
+    '',                             // R - toneladas_inicio
+    '',                             // S - toneladas_descargue
+    '',                             // T - diferencia_kg
+    valor_tonelada_inicial,         // U - valor_tonelada_inicial
+    '',                             // V - valor_tonelada_final
+    '',                             // W - diez_pcto
+    valor_anticipo_conductor,       // X - valor_anticipo_conductor
+    '',                             // Y - saldo_anticipo_conductor
+    '',                             // Z - total_gastos_conductor
+    '',                             // AA - saldo_pendiente_conductor
+    '',                             // AB - fecha_fin_viaje
+    '',                             // AC - total_gastos_propietario
+    '',                             // AD - ganancia_viaje_estimada
+    '',                             // AE - ganancia_viaje_real
+    '',                             // AF - link_manifiesto
+    '',                             // AG - link_gastos_conductor
+    '',                             // AH - link_gastos_propietario
+    correo_usuario,                 // AI - correo_usuario
+    usuario,                        // AJ - usuario
+    fecha_creacion,                 // AK - fecha_creacion
+    'solicitado',                   // AL - estado_viaje
+    'no',                           // AM - liquidado
+    estado_preoperacional           // AN - estado del preoperacional
   ];
 
   await sheets.spreadsheets.values.append({
@@ -194,12 +145,12 @@ const getResumenViajesPorSolicitante = async (email) => {
   }
 };
 
-const cerrarViajeYGastosConductor = async (consecutivo, datos) => {
-  const sheets = await getSheetsClient();
+const cerrarViajeYGastosConductor = async (consecutivo, datos, archivos) => {
+  const sheets = getSheetsClient();
 
   const response = await sheets.spreadsheets.values.get({
     spreadsheetId,
-    range: 'Viajes!A2:BE1000',
+    range: 'Viajes!A2:AM1000',
   });
 
   const filas = response.data.values;
@@ -208,21 +159,49 @@ const cerrarViajeYGastosConductor = async (consecutivo, datos) => {
 
   const filaActual = filas[filaIndex];
 
-  // Gastos conductor
-  const cant_peajes_conductor = parseFloat(datos.cant_peajes_conductor) || 0;
-  const valor_total_peajes_conductor = parseFloat(datos.valor_total_peajes_conductor) || 0;
-  const valor_cargue_conductor = parseFloat(datos.valor_cargue_conductor) || 0;
-  const valor_descargue_conductor = parseFloat(datos.valor_descargue_conductor) || 0;
-  const engrase_conductor = parseFloat(datos.engrase_conductor) || 0;
-  const parqueadero_conductor = parseFloat(datos.parqueadero_conductor) || 0;
-  const fumigacion_conductor = parseFloat(datos.fumigacion_conductor) || 0;
-  const lavadas_conductor = parseFloat(datos.lavadas_conductor) || 0;
-  const comision_despachador_conductor = parseFloat(datos.comision_despachador_conductor) || 0;
-  const valor_otro_conductor = parseFloat(datos.valor_otro_conductor) || 0;
+  // ===== VALIDAR ARCHIVOS OBLIGATORIOS =====
+  const gastosValidar = [
+    'peajes', 'lavadas', 'parqueadero', 'engrase', 
+    'fumigacion', 'otro', 'cargue'
+  ];
+  
+  for (const gasto of gastosValidar) {
+    const valor = parseFloat(datos[`${gasto}_conductor`]) || 0;
+    const tieneArchivos = archivos && archivos[`${gasto}_conductor_archivos`] && archivos[`${gasto}_conductor_archivos`].length > 0;
+    
+    if (valor > 0 && !tieneArchivos) {
+      throw new Error(`Debe adjuntar soporte para ${gasto}_conductor`);
+    }
+  }
 
-  const total_gastos_conductor = valor_total_peajes_conductor + valor_cargue_conductor +
-    valor_descargue_conductor + engrase_conductor + parqueadero_conductor + fumigacion_conductor + 
-    lavadas_conductor + comision_despachador_conductor + valor_otro_conductor;
+  // ===== VALIDAR Y SUBIR MANIFIESTO ===== (AGREGAR ESTO)
+ if (!archivos || !archivos['manifiesto'] || archivos['manifiesto'].length === 0) {
+  throw new Error('Debe adjuntar el manifiesto del viaje');
+ }
+
+ const linkManifiesto = await subirManifiesto(archivos['manifiesto'][0], consecutivo);
+
+  const placa = filaActual[1]; // B
+  let linkGastosConductor = null;
+  
+  if (archivos && Object.keys(archivos).length > 0) {
+    linkGastosConductor = await procesarArchivosGastos(archivos, placa, consecutivo, 'conductor');
+  }
+
+  // ===== CALCULAR TOTALES =====
+  const gastosConValor = {};
+  let total_gastos_conductor = 0;
+  
+  for (const gasto of gastosValidar) {
+    const valor = parseFloat(datos[`${gasto}_conductor`]) || 0;
+    gastosConValor[`${gasto}_conductor`] = valor;
+    total_gastos_conductor += valor;
+    
+    if (valor > 0) {
+      gastosConValor[`tipo_factura_${gasto}_conductor`] = datos[`tipo_factura_${gasto}_conductor`];
+      gastosConValor[`link_${gasto}_conductor`] = linkGastosConductor;
+    }
+  }
 
   // Toneladas
   const toneladas_inicio = parseFloat(datos.toneladas_inicio) || 0;
@@ -234,40 +213,33 @@ const cerrarViajeYGastosConductor = async (consecutivo, datos) => {
   const valor_viaje_estimado = toneladas_descargue * valor_tonelada_final;
 
   // Cálculos conductor
-  const valor_anticipo_conductor = parseFloat(filaActual[21]) || 0; // V
+  const valor_anticipo_conductor = parseFloat(filaActual[23]) || 0;
   const saldo_anticipo_conductor = valor_anticipo_conductor - total_gastos_conductor;
   const diez_pcto = valor_viaje_estimado * 0.10;
   const saldo_pendiente_conductor = diez_pcto - saldo_anticipo_conductor;
 
-  // Actualizar fila
-  filaActual[12] = valor_viaje_estimado;               // M
-  filaActual[15] = toneladas_inicio;                   // P
-  filaActual[16] = toneladas_descargue;                // Q
-  filaActual[17] = diferencia_kg;                      // R
-  filaActual[19] = valor_tonelada_final;               // T
-  filaActual[20] = diez_pcto;                          // U
-  filaActual[22] = saldo_anticipo_conductor;           // W
-  filaActual[23] = total_gastos_conductor;             // X
-  filaActual[24] = saldo_pendiente_conductor;          // Y
-  filaActual[25] = datos.fecha_fin_viaje || '';        // Z
-  filaActual[26] = cant_peajes_conductor;              // AA
-  filaActual[27] = valor_total_peajes_conductor;       // AB
-  filaActual[28] = valor_cargue_conductor;             // AC
-  filaActual[29] = valor_descargue_conductor;          // AD
-  filaActual[30] = engrase_conductor;                  // AE
-  filaActual[31] = parqueadero_conductor;              // AF
-  filaActual[32] = fumigacion_conductor;               // AG
-  filaActual[33] = lavadas_conductor;                  // AH
-  filaActual[34] = comision_despachador_conductor;     // AI
-  filaActual[35] = datos.otro_conductor || '';         // AJ
-  filaActual[36] = valor_otro_conductor;               // AK
-  filaActual[51] = datos.url_descargue || '';          // AZ
-  filaActual[55] = 'completado';                       // BD - estado_viaje
+  // ===== REGISTRAR GASTOS EN DETALLE_GASTOS_VIAJES =====
+  await detalleGastosViajesHelper.registrarGastosViaje(consecutivo, gastosConValor, 'conductor');
+  
+  filaActual[31] = linkManifiesto;
+  filaActual[32] = linkGastosConductor || '';
+  // ===== ACTUALIZAR VIAJE =====
+  filaActual[12] = valor_viaje_estimado;               
+  filaActual[17] = toneladas_inicio;                   
+  filaActual[18] = toneladas_descargue;                
+  filaActual[19] = diferencia_kg;                      
+  filaActual[21] = valor_tonelada_final;               
+  filaActual[22] = diez_pcto;                          
+  filaActual[24] = saldo_anticipo_conductor;           
+  filaActual[25] = total_gastos_conductor;             
+  filaActual[26] = saldo_pendiente_conductor;          
+  filaActual[27] = datos.fecha_fin_viaje || '';        
+  filaActual[37] = 'completado';                       
 
   const filaEnHoja = filaIndex + 2;
   await sheets.spreadsheets.values.update({
     spreadsheetId,
-    range: `Viajes!A${filaEnHoja}:BE${filaEnHoja}`,
+    range: `Viajes!A${filaEnHoja}:AM${filaEnHoja}`,
     valueInputOption: 'RAW',
     requestBody: { values: [filaActual] },
   });
@@ -282,12 +254,12 @@ const cerrarViajeYGastosConductor = async (consecutivo, datos) => {
   };
 };
 
-const aprobarViajeYGastosPropietario = async (consecutivo, datos) => {
-  const sheets = await getSheetsClient();
+const aprobarViajeYGastosPropietario = async (consecutivo, datos, archivos) => {
+  const sheets = getSheetsClient();
 
   const response = await sheets.spreadsheets.values.get({
     spreadsheetId,
-    range: 'Viajes!A2:BE1000',
+    range: 'Viajes!A2:AM1000',
   });
 
   const filas = response.data.values;
@@ -308,22 +280,43 @@ const aprobarViajeYGastosPropietario = async (consecutivo, datos) => {
   const rete_fuente = cliente.rete_fuente || 'no';
   const rete_ica = parseFloat(cliente.rete_ica) || 0;
 
-  // Gastos propietario
-  const cant_peajes_propietario = parseFloat(datos.cant_peajes_propietario) || 0;
-  const valor_total_peajes_propietario = parseFloat(datos.valor_total_peajes_propietario) || 0;
-  const valor_cargue_propietario = parseFloat(datos.valor_cargue_propietario) || 0;
-  const valor_descargue_propietario = parseFloat(datos.valor_descargue_propietario) || 0;
-  const engrase_propietario = parseFloat(datos.engrase_propietario) || 0;
-  const parqueadero_propietario = parseFloat(datos.parqueadero_propietario) || 0;
-  const fumigacion_propietario = parseFloat(datos.fumigacion_propietario) || 0;
-  const lavadas_propietario = parseFloat(datos.lavadas_propietario) || 0;
-  const comision_despachador_propietario = parseFloat(datos.comision_despachador_propietario) || 0;
-  const valor_otro_propietario = parseFloat(datos.valor_otro_propietario) || 0;
+  // ===== VALIDAR ARCHIVOS OBLIGATORIOS PROPIETARIO =====
+  const gastosValidar = [
+    'peajes', 'lavadas', 'parqueadero', 'engrase', 
+    'fumigacion', 'otro', 'cargue', 'descargue', 'comision'
+  ];
+  
+  for (const gasto of gastosValidar) {
+    const valor = parseFloat(datos[`${gasto}_propietario`]) || 0;
+    const tieneArchivos = archivos && archivos[`${gasto}_propietario_archivos`] && archivos[`${gasto}_propietario_archivos`].length > 0;
+    
+    if (valor > 0 && !tieneArchivos) {
+      throw new Error(`Debe adjuntar soporte para ${gasto}_propietario`);
+    }
+  }
 
-  const total_gastos_propietario = valor_total_peajes_propietario + valor_cargue_propietario +
-    valor_descargue_propietario + engrase_propietario + parqueadero_propietario +
-    fumigacion_propietario + lavadas_propietario + comision_despachador_propietario +
-    valor_otro_propietario;
+  // ===== SUBIR ARCHIVOS A DRIVE =====
+  const placa = filaActual[1]; // B
+  let linkGastosPropietario = null;
+  
+  if (archivos && Object.keys(archivos).length > 0) {
+    linkGastosPropietario = await procesarArchivosGastos(archivos, placa, consecutivo, 'propietario');
+  }
+
+  // ===== CALCULAR TOTALES =====
+  const gastosConValor = {};
+  let total_gastos_propietario = 0;
+  
+  for (const gasto of gastosValidar) {
+    const valor = parseFloat(datos[`${gasto}_propietario`]) || 0;
+    gastosConValor[`${gasto}_propietario`] = valor;
+    total_gastos_propietario += valor;
+    
+    if (valor > 0) {
+      gastosConValor[`tipo_factura_${gasto}_propietario`] = datos[`tipo_factura_${gasto}_propietario`];
+      gastosConValor[`link_${gasto}_propietario`] = linkGastosPropietario;
+    }
+  }
 
   // Cálculos cliente
   const valor_viaje_estimado = parseFloat(filaActual[12]) || 0; // M
@@ -338,42 +331,37 @@ const aprobarViajeYGastosPropietario = async (consecutivo, datos) => {
   const saldo_pendiente_cliente_real = saldo_pendiente_cliente_sin_descuento - total_descuentos_cliente;
 
   // Ganancia viaje estimada
-  const diez_pcto = parseFloat(filaActual[20]) || 0; // U
-  const total_gastos_conductor = parseFloat(filaActual[23]) || 0; // X
+  const diez_pcto = parseFloat(filaActual[22]) || 0; 
+  const total_gastos_conductor = parseFloat(filaActual[25]) || 0; // X
   const ganancia_viaje_estimada = valor_viaje_estimado - diez_pcto - total_gastos_conductor - total_gastos_propietario;
 
-  // Actualizar fila
+  // ===== REGISTRAR GASTOS EN DETALLE_GASTOS_VIAJES =====
+  await detalleGastosViajesHelper.registrarGastosViaje(consecutivo, gastosConValor, 'propietario');
+
+  // ===== ACTUALIZAR TODOS LOS GASTOS A "APROBADO" =====
+  await detalleGastosViajesHelper.actualizarEstadoGastosViaje(consecutivo, 'aprobado');
+  
+  filaActual[33] = linkGastosPropietario || ''
+  // ===== ACTUALIZAR VIAJE =====
   filaActual[5] = valor_anticipo_cliente;                  // F
   filaActual[6] = saldo_pendiente_cliente_sin_descuento;   // G
   filaActual[7] = saldo_pendiente_cliente_real;            // H
   filaActual[8] = descuento_rete_fuente;                   // I
   filaActual[9] = descuento_rete_ica;                      // J
   filaActual[10] = total_descuentos_cliente;               // K
-  filaActual[37] = cant_peajes_propietario;                // AL
-  filaActual[38] = valor_total_peajes_propietario;         // AM
-  filaActual[39] = valor_cargue_propietario;               // AN
-  filaActual[40] = valor_descargue_propietario;            // AO
-  filaActual[41] = engrase_propietario;                    // AP
-  filaActual[42] = parqueadero_propietario;                // AQ
-  filaActual[43] = fumigacion_propietario;                 // AR
-  filaActual[44] = lavadas_propietario;                    // AS
-  filaActual[45] = comision_despachador_propietario;       // AT
-  filaActual[46] = datos.otro_propietario || '';           // AU
-  filaActual[47] = valor_otro_propietario;                 // AV
-  filaActual[48] = total_gastos_propietario;               // AW
-  filaActual[49] = ganancia_viaje_estimada;                // AX
-  filaActual[55] = 'aprobado';                             // BD - estado_viaje
+  filaActual[28] = total_gastos_propietario;               // AW (nueva posición sin gastos individuales)
+  filaActual[29] = ganancia_viaje_estimada;                // AX
+  filaActual[37] = 'aprobado';                             // BD - estado_viaje
 
   const filaEnHoja = filaIndex + 2;
   await sheets.spreadsheets.values.update({
     spreadsheetId,
-    range: `Viajes!A${filaEnHoja}:BE${filaEnHoja}`,
+    range: `Viajes!A${filaEnHoja}:AM${filaEnHoja}`,
     valueInputOption: 'RAW',
     requestBody: { values: [filaActual] },
   });
 
   // ===== REGISTRAR EN GASTOS_VEHICULOS =====
-  const placa = filaActual[1]; // B
   await gastosVehiculoHelper.registrarGasto({
     placa,
     tipo_gasto: 'viaje',
@@ -392,11 +380,11 @@ const aprobarViajeYGastosPropietario = async (consecutivo, datos) => {
 };
 
 const completarSaldoCliente = async (consecutivo) => {
-  const sheets = await getSheetsClient();
+  const sheets = getSheetsClient();
 
   const response = await sheets.spreadsheets.values.get({
     spreadsheetId,
-    range: 'Viajes!A2:BE1000',
+    range: 'Viajes!A2:AM1000',
   });
 
   const filas = response.data.values;
@@ -411,12 +399,12 @@ const completarSaldoCliente = async (consecutivo) => {
   const codigoCliente = filaActual[2]; // C
   const valor_viaje_estimado = parseFloat(filaActual[12]) || 0; // M
   const valor_viaje_real = parseFloat(filaActual[13]) || valor_viaje_estimado; // N (si no está facturado, usa estimado)
-  const ganancia_viaje = parseFloat(filaActual[50]) || parseFloat(filaActual[49]) || 0; // AY o AX
+  const ganancia_viaje = parseFloat(filaActual[30]) || parseFloat(filaActual[29]) || 0; // AY o AX
 
   const filaEnHoja = filaIndex + 2;
   await sheets.spreadsheets.values.update({
     spreadsheetId,
-    range: `Viajes!A${filaEnHoja}:BE${filaEnHoja}`,
+    range: `Viajes!A${filaEnHoja}:AM${filaEnHoja}`,
     valueInputOption: 'RAW',
     requestBody: { values: [filaActual] },
   });
@@ -437,7 +425,7 @@ const calcularNomina = async (emailConductor, mes) => {
 
   const viajesConductor = viajes.filter(v =>
     v.correo_usuario === emailConductor &&
-    v.estado_viaje === 'aprobado' && // Cambio: era "completado"
+    (v.estado_viaje === 'aprobado' || v.estado_viaje === 'facturado') && 
     v.liquidado === 'no'
   );
 
@@ -484,12 +472,12 @@ const aprobarNomina = async (emailConductor, mes) => {
     throw new Error('No hay viajes para liquidar');
   }
 
-  const sheets = await getSheetsClient();
+  const sheets = getSheetsClient();
 
   // Marcar viajes como liquidados
   const responseViajes = await sheets.spreadsheets.values.get({
     spreadsheetId,
-    range: 'Viajes!A2:BE1000',
+    range: 'Viajes!A2:AM1000',
   });
 
   const filasViajes = responseViajes.data.values;
@@ -498,13 +486,13 @@ const aprobarNomina = async (emailConductor, mes) => {
   for (const consecutivo of calculo.viajes_ids) {
     const filaIndex = filasViajes.findIndex(f => f[0]?.toLowerCase() === consecutivo.toLowerCase());
     if (filaIndex !== -1) {
-      filasViajes[filaIndex][56] = 'si'; // BE - liquidado
+      filasViajes[filaIndex][38] = 'si'; // AM - liquidado
       placasAfectadas.add(filasViajes[filaIndex][1]); // B - placa
       
       const filaEnHoja = filaIndex + 2;
       await sheets.spreadsheets.values.update({
         spreadsheetId,
-        range: `Viajes!A${filaEnHoja}:BE${filaEnHoja}`,
+        range: `Viajes!A${filaEnHoja}:AM${filaEnHoja}`,
         valueInputOption: 'RAW',
         requestBody: { values: [filasViajes[filaIndex]] },
       });
@@ -558,7 +546,7 @@ const aprobarNomina = async (emailConductor, mes) => {
 };
 
 const pagarSalarioMensual = async (emailConductor, mes) => {
-  const sheets = await getSheetsClient();
+  const sheets = getSheetsClient();
   
   // Verificar si ya se pagó el salario base este mes
   const response = await sheets.spreadsheets.values.get({
@@ -634,7 +622,7 @@ const pagarSalarioMensual = async (emailConductor, mes) => {
 };
 
 const editarViajePorConsecutivo = async (consecutivo, nuevosDatos) => {
-  const sheets = await getSheetsClient();
+  const sheets = getSheetsClient();
 
   const response = await sheets.spreadsheets.values.get({
     spreadsheetId,
@@ -822,19 +810,19 @@ const facturarCliente = async (codigoCliente) => {
       destino: v.destino,
       fecha_inicio: v.fecha_inicio,
       fecha_fin_viaje: v.fecha_fin_viaje,
-      valor_viaje: v.valor_viaje,
-      valor_anticipo_cliente: v.valor_anticipo_cliente,
-      saldo_pendiente_cliente_real: v.saldo_pendiente_cliente_real
+      valor_viaje_estimado: v.valor_viaje_estimado,
+      // valor_anticipo_cliente: v.valor_anticipo_cliente,
+      // saldo_pendiente_cliente_real: v.saldo_pendiente_cliente_real
     }))
   };
 };
 
-const facturarViaje = async (consecutivo, valor_viaje_real) => {
-  const sheets = await getSheetsClient();
+const facturarViaje = async (consecutivo, valor_viaje_real, notas_facturacion, num_factura_cliente) => {
+  const sheets = getSheetsClient();
 
   const response = await sheets.spreadsheets.values.get({
     spreadsheetId,
-    range: 'Viajes!A2:BE1000',
+    range: 'Viajes!A2:AM1000',
   });
 
   const filas = response.data.values;
@@ -844,46 +832,49 @@ const facturarViaje = async (consecutivo, valor_viaje_real) => {
   const filaActual = filas[filaIndex];
 
   // Verificar que esté aprobado
-  if (filaActual[55] !== 'aprobado') { // BD
+  if (filaActual[37] !== 'aprobado') { // AL
     throw new Error('El viaje debe estar aprobado antes de facturar');
   }
 
-  const valor_viaje_estimado = parseFloat(filaActual[12]) || 0; // M
+  const valor_viaje_estimado = parseFloat(filaActual[12]) || 0; 
   const diferencia_facturacion = valor_viaje_real - valor_viaje_estimado;
 
-  // Recalcular 10% con valor real
+  // Opción A: Recalcular 10% con valor real
   const diez_pcto_nuevo = valor_viaje_real * 0.10;
-  const diez_pcto_anterior = parseFloat(filaActual[20]) || 0; // U
+  const diez_pcto_anterior = parseFloat(filaActual[22]) || 0; 
   const diferencia_diez_pcto = diez_pcto_nuevo - diez_pcto_anterior;
 
   // Actualizar 10% del conductor
-  filaActual[20] = diez_pcto_nuevo; // U
+  filaActual[22] = diez_pcto_nuevo; 
 
   // Recalcular saldo pendiente conductor
-  const saldo_anticipo_conductor = parseFloat(filaActual[22]) || 0; // W
+  const saldo_anticipo_conductor = parseFloat(filaActual[24]) || 0; 
   const saldo_pendiente_conductor_nuevo = diez_pcto_nuevo - saldo_anticipo_conductor;
-  filaActual[24] = saldo_pendiente_conductor_nuevo; // Y
+  filaActual[26] = saldo_pendiente_conductor_nuevo; 
 
   // Recalcular ganancia real del propietario
-  const total_gastos_conductor = parseFloat(filaActual[23]) || 0; // X
-  const total_gastos_propietario = parseFloat(filaActual[48]) || 0; // AW
+  const total_gastos_conductor = parseFloat(filaActual[25]) || 0; 
+  const total_gastos_propietario = parseFloat(filaActual[28]) || 0; 
   const ganancia_viaje_real = valor_viaje_real - diez_pcto_nuevo - total_gastos_conductor - total_gastos_propietario;
 
-  filaActual[13] = valor_viaje_real;           // N
-  filaActual[14] = diferencia_facturacion;     // O
-  filaActual[50] = ganancia_viaje_real;        // AY
-  filaActual[55] = 'facturado';                // BD
+  // Actualizar columnas
+  filaActual[13] = valor_viaje_real;           
+  filaActual[14] = diferencia_facturacion;     
+  filaActual[30] = ganancia_viaje_real;        
+  filaActual[15] = notas_facturacion || '';     
+  filaActual[16] = num_factura_cliente || '';   
+  filaActual[37] = 'facturado';                 
 
   const filaEnHoja = filaIndex + 2;
   await sheets.spreadsheets.values.update({
     spreadsheetId,
-    range: `Viajes!A${filaEnHoja}:BE${filaEnHoja}`,
+    range: `Viajes!A${filaEnHoja}:AM${filaEnHoja}`,
     valueInputOption: 'RAW',
     requestBody: { values: [filaActual] },
   });
 
   // Verificar si el viaje ya fue liquidado
-  const liquidado = filaActual[56] === 'si'; // BE
+  const liquidado = filaActual[38] === 'si'; // AM
 
   return { 
     valor_viaje_real, 
@@ -892,14 +883,13 @@ const facturarViaje = async (consecutivo, valor_viaje_real) => {
     diferencia_diez_pcto,
     ya_liquidado: liquidado,
     mensaje: liquidado 
-      ? `Se aplicará ajuste de $${diferencia_diez_pcto.toFixed(2)} en la próxima nómina` 
+      ? `⚠️ Se aplicará ajuste de $${diferencia_diez_pcto.toFixed(2)} en la próxima nómina` 
       : 'Cambios aplicados correctamente'
   };
 };
 
 const crearCarpeta = async (nombreCarpeta, parentFolderId) => {
-  const drive = await getDriveClient();
-  
+  const drive = getDriveClient();
   const fileMetadata = {
     name: nombreCarpeta,
     mimeType: 'application/vnd.google-apps.folder',
@@ -915,7 +905,7 @@ const crearCarpeta = async (nombreCarpeta, parentFolderId) => {
 };
 
 const subirArchivo = async (archivo, carpetaId) => {
-  const drive = await getDriveClient();
+  const drive = getDriveClient();
   
   const fileMetadata = {
     name: archivo.originalname,
@@ -939,28 +929,6 @@ const subirArchivo = async (archivo, carpetaId) => {
   return respuesta.data.webViewLink;
 };
 
-const procesarArchivos = async (archivos, consecutivo) => {
-  if (!archivos || archivos.length === 0) {
-    return null;
-  }
-  
-  const carpetaPadreId = '1dT4qecpToKSNQlpp5q8zfqIQeEi3RKMp';
-  
-  let carpeta = await buscarCarpetaPorNombre(consecutivo, carpetaPadreId);
-  
-  if (!carpeta) {
-    carpeta = await crearCarpeta(consecutivo, carpetaPadreId);
-  }
-  
-  const enlaces = [];
-  for (const archivo of archivos) {
-    const enlace = await subirArchivo(archivo, carpeta.id);
-    enlaces.push(enlace);
-  }
-  
-  return carpeta.webViewLink;
-};
-
 const subirArchivosACarpetaExistente = async (archivos, carpetaId) => {
   if (!archivos || archivos.length === 0) {
     return null;
@@ -972,7 +940,8 @@ const subirArchivosACarpetaExistente = async (archivos, carpetaId) => {
     enlaces.push(enlace);
   }
   
-  const drive = await getDriveClient();
+  const drive = getDriveClient();
+  
   const carpeta = await drive.files.get({
     fileId: carpetaId,
     fields: 'webViewLink'
@@ -982,7 +951,7 @@ const subirArchivosACarpetaExistente = async (archivos, carpetaId) => {
 };
 
 const buscarCarpetaPorNombre = async (nombreCarpeta, parentFolderId) => {
-  const drive = await getDriveClient();
+  const drive = getDriveClient();
   
   let query = `name = '${nombreCarpeta}' and mimeType = 'application/vnd.google-apps.folder'`;
   if (parentFolderId) {
@@ -998,7 +967,68 @@ const buscarCarpetaPorNombre = async (nombreCarpeta, parentFolderId) => {
   return response.data.files.length > 0 ? response.data.files[0] : null;
 };
 
+const procesarArchivosGastos = async (archivos, placa, consecutivo, quien) => {
+  if (!archivos || Object.keys(archivos).length === 0) {
+    console.log("No hay archivos");
+    return null;
+  }
 
+  let carpetaViaje = await buscarCarpetaPorNombre(consecutivo, carpetaPadreId);
+  if (!carpetaViaje) {
+    carpetaViaje = await crearCarpeta(consecutivo, carpetaPadreId);
+  }
+
+  const nombreSubcarpeta =
+    quien === 'conductor'
+      ? 'Gastos_Conductor'
+      : 'Gastos_Propietario';
+
+  let carpetaGastos = await buscarCarpetaPorNombre(nombreSubcarpeta, carpetaViaje.id);
+  if (!carpetaGastos) {
+    carpetaGastos = await crearCarpeta(nombreSubcarpeta, carpetaViaje.id);
+  }
+
+  for (const key in archivos) {
+  if (key.endsWith('_archivos')) {
+    const files = archivos[key];
+    for (const file of files) {
+      await subirArchivo(file, carpetaGastos.id);
+    }
+  }
+}
+
+  return carpetaGastos.webViewLink;
+};
+
+const subirManifiesto = async (archivo, consecutivo) => {
+  const drive = getDriveClient();
+  const carpetaPadreId = process.env.CARPETA_PADRE_ID_VIAJES;
+  
+  // Buscar o crear carpeta del viaje
+  let carpetaViaje = await buscarCarpetaPorNombre(consecutivo, carpetaPadreId);
+  if (!carpetaViaje) {
+    carpetaViaje = await crearCarpeta(consecutivo, carpetaPadreId);
+  }
+  
+  // Subir archivo directamente a la carpeta del viaje (no en subcarpeta)
+  const enlace = await subirArchivo(archivo, carpetaViaje.id);
+  
+  return enlace;
+};
+
+const contarViajesPorPlaca = async (placa) => {
+  const sheets = getSheetsClient();
+  const response = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: 'Viajes!B:B', // columna B es la placa
+  });
+
+  const filas = response.data.values || [];
+  // fila 0 es el encabezado, filtramos por placa
+  return filas.slice(1).filter(fila => 
+    fila[0] && fila[0].toString().toLowerCase() === placa.toLowerCase()
+  ).length;
+};
 
 export const viajeHelper = {
   getViajes,
@@ -1007,7 +1037,6 @@ export const viajeHelper = {
   getViajesByConsecutivo,
   getResumenViajesPorSolicitante,
   editarViajePorConsecutivo,
-  procesarArchivos,
   subirArchivosACarpetaExistente,
   buscarCarpetaPorNombre,
   aprobarNomina,
@@ -1017,6 +1046,8 @@ export const viajeHelper = {
   pagarSalarioMensual,
   facturarCliente,
   aprobarViajeYGastosPropietario,
-  facturarViaje
+  facturarViaje,
+  subirManifiesto,
+  contarViajesPorPlaca
 
 };

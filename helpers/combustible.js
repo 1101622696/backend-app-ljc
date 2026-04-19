@@ -1,56 +1,13 @@
-import { google } from 'googleapis';
 import stream from 'stream';
-import {vehiculoHelper} from './vehiculos.js';
+import { getDriveClient, getSheetsClient } from '../services/google.js';
+import { vehiculoHelper } from '../helpers/vehiculos.js';
+import { gastosVehiculoHelper } from '../helpers/gastos.js';
 
-const spreadsheetId = '1UtSm_ZBiNWt2njncuJ5PSHreMbj3InG9gyXapqVUBEQ';
-
-const getAuth = () => {
-  if (process.env.GOOGLE_CLIENT_EMAIL && process.env.GOOGLE_PRIVATE_KEY) {
-    return new google.auth.GoogleAuth({
-      credentials: {
-        client_email: process.env.GOOGLE_CLIENT_EMAIL,
-        private_key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
-      },
-      scopes: [
-        'https://www.googleapis.com/auth/spreadsheets',
-        'https://www.googleapis.com/auth/drive'
-      ],
-    });
-  } else {
-    return new google.auth.GoogleAuth({
-      keyFile: './config/credenciales-sheets.json',
-      scopes: [
-        'https://www.googleapis.com/auth/spreadsheets',
-        'https://www.googleapis.com/auth/drive'
-      ],
-    });
-  }
-};
-
-const getSheetsClient = async () => {
-  const authClient = getAuth();
-  const client = await authClient.getClient();
-  return google.sheets({ version: 'v4', auth: client });
-};
-const getDriveClient = async () => {
-  const authClient = getAuth();
-  const client = await authClient.getClient();
-  return google.drive({ version: 'v3', auth: client });
-};
-
-const getSiguienteConsecutivo = async () => {
-  const registros = await getCombustibles();
-  
-  if (!registros.length) return "COMB-1";
-
-  const ultimo = registros[0].consecutivo;
-  const numero = parseInt(ultimo.split('-')[1], 10) || 0;
-  
-  return `COMB-${numero + 1}`;
-};
+const spreadsheetId = process.env.SPREADSHEET_ID;
+const carpetaPadreId = process.env.CARPETA_PADRE_ID_COMBUSTIBLE;
 
 const getCombustibles = async () => {
-  const sheets = await getSheetsClient();
+  const sheets = getSheetsClient();
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId,
     range: 'Combustible!A2:O1000',
@@ -73,8 +30,19 @@ const getCombustibles = async () => {
   });
 };
 
+const getSiguienteConsecutivo = async () => {
+  const registros = await getCombustibles();
+  
+  if (!registros.length) return "COMB-1";
+
+  const ultimo = registros[0].consecutivo;
+  const numero = parseInt(ultimo.split('-')[1], 10) || 0;
+  
+  return `COMB-${numero + 1}`;
+};
+
 const registrarCombustible = async ({ placa, odometro_actual, galones_cargados, valor_pagado, correo_usuario, usuario, link_factura }) => {
-  const sheets = await getSheetsClient();
+  const sheets = getSheetsClient();
   const consecutivo = await getSiguienteConsecutivo();
   const fecha_registro = new Date().toISOString().split('T')[0];
 
@@ -121,7 +89,9 @@ const registrarCombustible = async ({ placa, odometro_actual, galones_cargados, 
     alerta,
     correo_usuario,
     usuario,
-    link_factura || ''
+    'pendiente',
+    "",
+    link_factura || '',
   ];
 
   await sheets.spreadsheets.values.append({
@@ -132,18 +102,182 @@ const registrarCombustible = async ({ placa, odometro_actual, galones_cargados, 
     requestBody: { values: [nuevaFila] },
   });
 
+  // ===== REGISTRAR EN GASTOS_VEHICULOS =====
+  await gastosVehiculoHelper.registrarGasto({
+    placa,
+    tipo_gasto: 'combustible',
+    codigo_referencia: consecutivo,
+    valor_gasto: valor_pagado,
+    descripcion: `Combustible ${galones_cargados} gal - Rendimiento: ${rendimiento_real.toFixed(2)} km/gal`,
+    fecha_registro
+  });
+
   return { 
     consecutivo, 
     rendimiento_real, 
     alerta,
     mensaje: alerta === 'si' 
-      ? `Alerta: Rendimiento bajo (${rendimiento_real.toFixed(2)} km/gal vs ${rendimiento_esperado} km/gal esperado)` 
+      ? `⚠️ Alerta: Rendimiento bajo (${rendimiento_real.toFixed(2)} km/gal vs ${rendimiento_esperado} km/gal esperado)` 
       : 'Registro exitoso'
   };
+};
+
+const legalizarCombustible = async (consecutivo, numero_factura) => {
+  const sheets = getSheetsClient();
+
+  const response = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: 'Combustible!A2:Q1000',
+  });
+
+  const filas = response.data.values || [];
+  const filaIndex = filas.findIndex(f => f[0]?.toLowerCase() === consecutivo.toLowerCase());
+
+  if (filaIndex === -1) {
+    throw new Error('Registro de combustible no encontrado');
+  }
+
+  const filaActual = filas[filaIndex];
+
+  // Verificar que esté pendiente
+  if (filaActual[14] === 'legalizado') {
+    throw new Error('Este registro ya está legalizado');
+  }
+
+  filaActual[14] = 'legalizado'; // O - estado_factura
+
+  // Actualizar también el número de factura si se proporciona (agregar columna P)
+  if (numero_factura) {
+    filaActual[15] = numero_factura; // P - numero_factura (NUEVA COLUMNA)
+  }
+
+  const filaEnHoja = filaIndex + 2;
+  await sheets.spreadsheets.values.update({
+    spreadsheetId,
+    range: `Combustible!A${filaEnHoja}:Q${filaEnHoja}`,
+    valueInputOption: 'RAW',
+    requestBody: { values: [filaActual] },
+  });
+
+  return {
+    consecutivo,
+    placa: filaActual[2],
+    valor: filaActual[5],
+    mensaje: 'Combustible legalizado correctamente'
+  };
+};
+
+const crearCarpeta = async (nombreCarpeta, parentFolderId) => {
+  const drive = getDriveClient();
+  
+  const fileMetadata = {
+    name: nombreCarpeta,
+    mimeType: 'application/vnd.google-apps.folder',
+    parents: parentFolderId ? [parentFolderId] : []
+  };
+  
+  const respuesta = await drive.files.create({
+    resource: fileMetadata,
+    fields: 'id, webViewLink'
+  });
+  
+  return respuesta.data;
+};
+
+const procesarArchivos = async (archivos, placafoldername) => {
+  if (!archivos || archivos.length === 0) {
+    return null;
+  }
+    
+  let carpeta = await buscarCarpetaPorNombre(placafoldername, carpetaPadreId);
+  
+    if (!carpeta) {
+      carpeta = await crearCarpeta(placafoldername, carpetaPadreId);
+    }
+
+  const enlaces = [];
+  for (const archivo of archivos) {
+    const enlace = await subirArchivo(archivo, carpeta.id);
+    enlaces.push(enlace);
+  }
+  
+  return carpeta.webViewLink;
+};
+
+const subirArchivo = async (archivo, carpetaId) => {
+  try {
+    const drive = getDriveClient();
+
+    const fileMetadata = {
+      name: archivo.originalname,
+      parents: [carpetaId]
+    };
+
+    const bufferStream = new stream.PassThrough();
+    bufferStream.end(archivo.buffer);
+
+    const media = {
+      mimeType: archivo.mimetype,
+      body: bufferStream
+    };
+
+    const respuesta = await drive.files.create({
+      resource: fileMetadata,
+      media: media,
+      fields: 'id, webViewLink'
+    });
+
+    return respuesta.data.webViewLink;
+  } catch (error) {
+    console.error('Error subiendo archivo:', error.message);
+    throw error;
+  }
+};
+
+const buscarCarpetaPorNombre = async (nombreCarpeta, parentFolderId) => {
+  const drive = getDriveClient();
+  
+  // Crear consulta para buscar por nombre exacto dentro de la carpeta padre
+  let query = `name = '${nombreCarpeta}' and mimeType = 'application/vnd.google-apps.folder'`;
+  if (parentFolderId) {
+    query += ` and '${parentFolderId}' in parents`;
+  }
+  
+  const response = await drive.files.list({
+    q: query,
+    fields: 'files(id, name, webViewLink)',
+    spaces: 'drive'
+  });
+  
+  return response.data.files.length > 0 ? response.data.files[0] : null;
+};
+
+const subirArchivosACarpetaExistente = async (archivos, carpetaId) => {
+  if (!archivos || archivos.length === 0) {
+    return null;
+  }
+  
+  // Subir cada archivo a la carpeta existente
+  const enlaces = [];
+  for (const archivo of archivos) {
+    const enlace = await subirArchivo(archivo, carpetaId);
+    enlaces.push(enlace);
+  }
+  
+  // Devolver el enlace a la carpeta (necesitamos obtenerlo)
+  const drive = getDriveClient();
+  const carpeta = await drive.files.get({
+    fileId: carpetaId,
+    fields: 'webViewLink'
+  });
+  
+  return carpeta.data.webViewLink;
 };
 
 export const combustibleHelper = {
   getSiguienteConsecutivo,
   getCombustibles,
-  registrarCombustible
+  registrarCombustible,
+  legalizarCombustible,
+  procesarArchivos
 };

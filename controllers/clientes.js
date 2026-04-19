@@ -7,13 +7,12 @@ crearCliente: async (req, res) => {
     const {empresa, nit, telefono, email, tipo_pago, rete_fuente, rete_ica} = req.body;
 
     const estado = req.body.estado || "activo";
-    const viajes = req.body.viajes || "0";
     const economia = req.body.viajes || "0";
     const fecha_creacion = new Date().toISOString().split('T')[0];
-    const resultado = await clienteHelper.guardarCliente({ empresa, nit, estado, viajes, economia, telefono, email, tipo_pago, rete_fuente, rete_ica, fecha_creacion });
+    const resultado = await clienteHelper.guardarCliente({ empresa, nit, estado, economia, telefono, email, tipo_pago, rete_fuente, rete_ica, fecha_creacion });
   
       res.status(200).json({
-        mensaje: 'Cliente guardado  con link correctamente',
+        mensaje: 'Cliente guardado correctamente',
         codigo: resultado.codigo
       });
 

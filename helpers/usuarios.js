@@ -1,37 +1,12 @@
 import { generarJWT } from './generar-jwt.js'; 
+import { getDriveClient, getSheetsClient } from '../services/google.js';
 
-import { google } from 'googleapis';
-
-const spreadsheetId = '1UtSm_ZBiNWt2njncuJ5PSHreMbj3InG9gyXapqVUBEQ';
-
-const getAuth = () => {
-  if (process.env.GOOGLE_CLIENT_EMAIL && process.env.GOOGLE_PRIVATE_KEY) {
-    return new google.auth.GoogleAuth({
-      credentials: {
-        client_email: process.env.GOOGLE_CLIENT_EMAIL,
-        private_key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
-      },
-      scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-    });
-  } else {
-    return new google.auth.GoogleAuth({
-      keyFile: './config/credenciales-sheets.json',
-      scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-    });
-  }
-};
-
-const getSheetsClient = async () => {
-  const auth = getAuth();
-  return google.sheets({ version: 'v4', auth });
-};
+const spreadsheetId = process.env.SPREADSHEET_ID;
+// const carpetaPadreId = process.env.CARPETA_PADRE_ID_USUARIOS;
 
 const leerUsuariosDesdeSheets = async () => {
-  const sheets = await getSheetsClient();
-  
+  const sheets = getSheetsClient();
   const range = 'Usuarios!A1:AB15'; 
-const spreadsheetId = '1UtSm_ZBiNWt2njncuJ5PSHreMbj3InG9gyXapqVUBEQ';
-
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId,
     range,
@@ -158,7 +133,7 @@ const getUsuarioPorEstado = async (valor) => {
 };
 
 const guardarUsuario = async ({ nombre, email, password, perfil, estado,  placa_asignada, tipo_documento, documento, ciudad_expedicion, fecha_expedicion, pais_nacimiento, ciudad_nacimiento, fecha_nacimiento, grupo_sanguineo_rh, genero, estado_civil, telefono, tipo_licencia, num_licencia, fecha_expedicion_licencia, fecha_vencimiento, viajes_realizados, banco, num_cuenta, salario_base, sso, codigo, fechacodigo }) => {
-    const sheets = await getSheetsClient();
+    const sheets = getSheetsClient();
     const nuevaFila = [nombre, email, password, perfil, estado,  placa_asignada, tipo_documento, documento, ciudad_expedicion, fecha_expedicion, pais_nacimiento, ciudad_nacimiento, fecha_nacimiento, grupo_sanguineo_rh, genero, estado_civil, telefono, tipo_licencia, num_licencia, fecha_expedicion_licencia, fecha_vencimiento, viajes_realizados, banco, num_cuenta, salario_base, sso, codigo, fechacodigo];
   
     await sheets.spreadsheets.values.append({
@@ -173,7 +148,7 @@ const guardarUsuario = async ({ nombre, email, password, perfil, estado,  placa_
 };
 
 const editarUsuario= async (email, nuevosDatos) => {
-    const sheets = await getSheetsClient();
+    const sheets = getSheetsClient();
   
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId,
@@ -238,7 +213,7 @@ const editarUsuario= async (email, nuevosDatos) => {
 };
 
 const editarPasswordUsuario= async (email, password) => {
-    const sheets = await getSheetsClient();
+    const sheets = getSheetsClient();
   
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId,
@@ -282,8 +257,8 @@ const editarPasswordUsuario= async (email, password) => {
       filaActual[23], 
       filaActual[24], 
       filaActual[25], 
-      nuevosDatos.codigo || filaActual[26],
-      nuevosDatos.fechacodigo || filaActual[27],
+      filaActual[26], 
+      filaActual[27], 
     ];
   
     const filaEnHoja = filaIndex + 2; 
@@ -302,7 +277,7 @@ const editarPasswordUsuario= async (email, password) => {
   
 const actualizarEstadoEnSheets = async (email, nuevoEstado = "activo") => {
     try {
-      const sheets = await getSheetsClient();
+      const sheets = getSheetsClient();
       
       const response = await sheets.spreadsheets.values.get({
         spreadsheetId,
@@ -379,7 +354,6 @@ export const usuarioHelper = {
   getUsuarioByEmail,
   getUsuarioPorPerfil,
   getUsuarioPorEstado,
-  getAuth,
   getSheetsClient,
   leerUsuariosDesdeSheets
 };

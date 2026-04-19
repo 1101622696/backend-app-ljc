@@ -1,36 +1,9 @@
-import { google } from 'googleapis';
+import { getSheetsClient } from '../services/google.js';
 
-const spreadsheetId = '1UtSm_ZBiNWt2njncuJ5PSHreMbj3InG9gyXapqVUBEQ';
-
-const getAuth = () => {
-  if (process.env.GOOGLE_CLIENT_EMAIL && process.env.GOOGLE_PRIVATE_KEY) {
-    return new google.auth.GoogleAuth({
-      credentials: {
-        client_email: process.env.GOOGLE_CLIENT_EMAIL,
-        private_key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
-      },
-      scopes: [
-        'https://www.googleapis.com/auth/spreadsheets'
-      ],
-    });
-  } else {
-    return new google.auth.GoogleAuth({
-      keyFile: './config/credenciales-sheets.json',
-      scopes: [
-        'https://www.googleapis.com/auth/spreadsheets'
-      ],
-    });
-  }
-};
-
-const getSheetsClient = async () => {
-  const authClient = getAuth();
-  const client = await authClient.getClient();
-  return google.sheets({ version: 'v4', auth: client });
-};
+const spreadsheetId = process.env.SPREADSHEET_ID;
 
 const obtenerDatosCliente = async () => {
-  const sheets = await getSheetsClient();
+  const sheets = getSheetsClient();
   
   const range = 'Clientes!A1:N100'; 
 
@@ -62,11 +35,11 @@ const getSiguienteCodigo = async () => {
   return `C-${numero + 1}`;
 };
 
-const guardarCliente = async ({  empresa, nit, estado, viajes, economia, telefono, email,tipo_pago, rete_fuente, rete_ica, fecha_creacion }) => {
-  const sheets = await getSheetsClient();
+const guardarCliente = async ({  empresa, nit, estado, viajes, telefono, email,tipo_pago, rete_fuente, rete_ica, fecha_creacion }) => {
+  const sheets = getSheetsClient();
   const codigo = await getSiguienteCodigo();
 
-  const nuevaFila = [ codigo, empresa, nit, estado, viajes, economia, telefono, email, tipo_pago, rete_fuente, rete_ica, fecha_creacion];
+  const nuevaFila = [ codigo, empresa, nit, estado, viajes, telefono, email, tipo_pago, rete_fuente, rete_ica, fecha_creacion];
 
   await sheets.spreadsheets.values.append({
     spreadsheetId,
@@ -99,7 +72,7 @@ const getClientesPorEstado = async (valor) => {
 };
 
 const editarClienteporCodigo = async (codigo, nuevosDatos) => {
-  const sheets = await getSheetsClient();
+  const sheets = getSheetsClient();
 
   const response = await sheets.spreadsheets.values.get({
     spreadsheetId,
@@ -145,7 +118,7 @@ const editarClienteporCodigo = async (codigo, nuevosDatos) => {
 };
 
 const actualizarEconomiaCliente = async (codigoCliente, valor_viaje_estimado, valor_viaje_real, ganancia_viaje) => {
-  const sheets = await getSheetsClient();
+  const sheets = getSheetsClient();
 
   const response = await sheets.spreadsheets.values.get({
     spreadsheetId,
@@ -187,7 +160,7 @@ const actualizarEconomiaCliente = async (codigoCliente, valor_viaje_estimado, va
 
 const actualizarEstadoEnSheets = async (codigo, nuevoEstado = "activo") => {
   try {
-    const sheets = await getSheetsClient();
+    const sheets = getSheetsClient();
     
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId,
