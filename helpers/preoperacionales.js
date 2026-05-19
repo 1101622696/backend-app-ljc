@@ -4,11 +4,14 @@ import { getDriveClient, getSheetsClient } from '../services/google.js';
 const spreadsheetId = process.env.SPREADSHEET_ID;
 const carpetaPadreId = process.env.CARPETA_PADRE_ID_PREOPERACIONAL;
 
-const obtenerDatosPreoperacional = async (nombreHoja, rango = 'A1:AX1000') => {
+const obtenerDatosPreoperacional = async () => {
   const sheets = getSheetsClient();
+  
+  const range = 'Preoperacional!A1:AX1000'; 
+
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId,
-    range: `${nombreHoja}!${rango}`,
+    range,
   });
 
   const rows = res.data.values;
@@ -20,16 +23,7 @@ const obtenerDatosPreoperacional = async (nombreHoja, rango = 'A1:AX1000') => {
   );
 };
 
-const getPreoperacionales = async () => {
-  const preoperacionales = await obtenerDatosPreoperacional('Preoperacional');
-  
-  return preoperacionales.sort((a, b) => {
-    const numA = parseInt(a.consecutivo.replace(/\D/g, ''), 10);
-    const numB = parseInt(b.consecutivo.replace(/\D/g, ''), 10);
-    
-    return numB - numA;
-  });
-};
+const getPreoperacionales = () => obtenerDatosPreoperacional();
 
 const getSiguienteConsecutivo = async () => {
   const preoperacionales = await getPreoperacionales();

@@ -6,39 +6,106 @@ import { gastosVehiculoHelper } from '../helpers/gastos.js';
 const spreadsheetId = process.env.SPREADSHEET_ID;
 const carpetaPadreId = process.env.CARPETA_PADRE_ID_COMBUSTIBLE;
 
-const getCombustibles = async () => {
+const obtenerCombustible = async () => {
   const sheets = getSheetsClient();
+  
+  const range = 'Combustible!A1:Q1000'; 
+
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId,
-    range: 'Combustible!A2:O1000',
+    range,
   });
 
-  const rows = res.data.values || [];
-  const headers = [
-    'consecutivo', 'fecha_registro', 'placa', 'odometro_actual', 'galones_cargados',
-    'valor_pagado', 'precio_por_galon', 'km_recorridos', 'rendimiento_real',
-    'rendimiento_esperado', 'diferencia_rendimiento', 'alerta', 'correo_usuario',
-    'usuario', 'link_factura'
-  ];
-  
-  return rows.map(row =>
+  const rows = res.data.values;
+  if (!rows || rows.length === 0) return [];
+
+  const headers = rows[0].map(h => h.trim().toLowerCase());
+  return rows.slice(1).map(row =>
     Object.fromEntries(row.map((val, i) => [headers[i], val]))
-  ).sort((a, b) => {
-    const numA = parseInt(a.consecutivo?.replace(/\D/g, ''), 10) || 0;
-    const numB = parseInt(b.consecutivo?.replace(/\D/g, ''), 10) || 0;
-    return numB - numA;
+  );
+};
+
+const getCombustibles = () => obtenerCombustible();
+
+const getCombustibleById = async (consecutivo) => {
+  const combustibles = await getCombustibles();
+  return combustibles.find(combustible => 
+    combustible.consecutivo === consecutivo
+  );
+};
+
+const filtrarCombustiblePorCampoTexto = (combustibles, campo, valor) => {
+  return combustibles.filter(combustible => 
+    combustible[campo] && combustible[campo].toLowerCase() === valor.toLowerCase()
+  );
+};
+
+const ordenarCombustiblePorCampoNumerico = (combustibles, campo, orden = 'desc') => {
+  return combustibles.sort((a, b) => {
+    const valorA = parseFloat(a[campo]) || 0;
+    const valorB = parseFloat(b[campo]) || 0;
+    
+    return orden.toLowerCase() === 'desc' ? valorB - valorA : valorA - valorB;
   });
 };
+
+const getCombustiblesOrdenadosPorGalones = async (orden = 'desc') => {
+  const combustibles = await getCombustibles();
+  return ordenarCombustiblePorCampoNumerico(combustibles, 'galones_cargados', orden);
+};
+
+const getCombustiblesOrdenadosPorValorPagado = async (orden = 'desc') => {
+  const combustibles = await getCombustibles();
+  return ordenarCombustiblePorCampoNumerico(combustibles, 'valor_pagado', orden);
+};
+
+const getCombustiblesOrdenadosPorPrecioPorGalon = async (orden = 'desc') => {
+  const combustibles = await getCombustibles();
+  return ordenarCombustiblePorCampoNumerico(combustibles, 'precio_por_galon', orden);
+};
+
+const getCombustiblesOrdenadosPorRendimientoReal = async (orden = 'desc') => {
+  const combustibles = await getCombustibles();
+  return ordenarCombustiblePorCampoNumerico(combustibles, 'rendimiento_real', orden);
+};
+
+const getCombustiblesPorAlerta = async (valor) => {
+  const combustibles = await getCombustibles();
+  return filtrarCombustiblePorCampoTexto(combustibles, 'alerta', valor);
+};
+
+const getCombustiblesPorEstadoFactura = async (valor) => {
+  const combustibles = await getCombustibles();
+  return filtrarCombustiblePorCampoTexto(combustibles, 'estado_factura', valor);
+};
+
+
+const getCombustiblesPorMes = async (mes) => {
+  const combustibles = await getCombustibles();
+
+  return combustibles.filter((combustible) => {
+    if (!combustible.fecha_registro) return false;
+
+    const fecha = new Date(combustible.fecha_registro);
+
+    return fecha.getMonth() + 1 === Number(mes);
+  });
+};
+
 
 const getSiguienteConsecutivo = async () => {
   const registros = await getCombustibles();
   
   if (!registros.length) return "COMB-1";
 
-  const ultimo = registros[0].consecutivo;
-  const numero = parseInt(ultimo.split('-')[1], 10) || 0;
+  // Sacar el número más alto de todos los consecutivos
+  const numeros = registros
+    .map(r => parseInt(r.consecutivo?.split('-')[1], 10) || 0)
+    .filter(n => !isNaN(n));
+
+  const maximo = Math.max(...numeros);
   
-  return `COMB-${numero + 1}`;
+  return `COMB-${maximo + 1}`;
 };
 
 const registrarCombustible = async ({ placa, odometro_actual, galones_cargados, valor_pagado, correo_usuario, usuario, link_factura }) => {
@@ -276,7 +343,15 @@ const subirArchivosACarpetaExistente = async (archivos, carpetaId) => {
 
 export const combustibleHelper = {
   getSiguienteConsecutivo,
+  getCombustibleById,
   getCombustibles,
+  getCombustiblesOrdenadosPorGalones,
+  getCombustiblesOrdenadosPorValorPagado,
+  getCombustiblesOrdenadosPorPrecioPorGalon,
+  getCombustiblesOrdenadosPorRendimientoReal,
+  getCombustiblesPorAlerta,
+  getCombustiblesPorEstadoFactura,
+  getCombustiblesPorMes,
   registrarCombustible,
   legalizarCombustible,
   procesarArchivos

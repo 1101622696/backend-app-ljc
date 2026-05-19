@@ -4,10 +4,10 @@ import { viajeHelper } from '../helpers/viajes.js';
 
 const spreadsheetId = process.env.SPREADSHEET_ID;
 
-const generarResumenMensual = async (placa, año, mes) => {
+const generarResumenMensual = async (placa, anio, mes) => {
   // Formatear mes a 2 dígitos
   const mesPadded = mes.toString().padStart(2, '0');
-  const fechaInicio = `${año}-${mesPadded}`;
+  const fechaInicio = `${anio}-${mesPadded}`;
 
   // 1. Filtrar Gastos_Vehiculos del mes
   const gastos = await gastosVehiculoHelper.getGastosVehiculos();
@@ -49,7 +49,7 @@ const generarResumenMensual = async (placa, año, mes) => {
   const diferencia = total_ingresos - total_gastos;
 
   return {
-    año,
+    anio,
     mes: mesPadded,
     placa,
     total_gastos,
@@ -73,13 +73,13 @@ const guardarResumenMensual = async (resumen) => {
 
   const filas = response.data.values || [];
   const filaIndex = filas.findIndex(f => 
-    f[0] === resumen.año && 
+    f[0] === resumen.anio && 
     f[1] === resumen.mes && 
     f[2] === resumen.placa
   );
 
   const nuevaFila = [
-    resumen.año,
+    resumen.anio,
     resumen.mes,
     resumen.placa,
     resumen.total_gastos,
@@ -114,18 +114,18 @@ const guardarResumenMensual = async (resumen) => {
   return resumen;
 };
 
-const generarResumenAnual = async (placa, año) => {
+const generarResumenAnual = async (placa, anio) => {
   const resumenMensual = [];
   
   // Generar resumen de cada mes
   for (let mes = 1; mes <= 12; mes++) {
-    const resumen = await generarResumenMensual(placa, año, mes);
+    const resumen = await generarResumenMensual(placa, anio, mes);
     resumenMensual.push(resumen);
   }
 
   // Calcular totales anuales
   const total_anual = {
-    año,
+    anio,
     mes: 'TOTAL',
     placa,
     total_gastos: resumenMensual.reduce((acc, r) => acc + r.total_gastos, 0),
@@ -146,7 +146,7 @@ const generarResumenAnual = async (placa, año) => {
   };
 };
 
-const getResumenVehiculo = async (placa, año) => {
+const getResumenVehiculo = async (placa, anio) => {
   const sheets = getSheetsClient();
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId,
@@ -154,13 +154,13 @@ const getResumenVehiculo = async (placa, año) => {
   });
 
   const rows = res.data.values || [];
-  const headers = ['año', 'mes', 'placa', 'total_gastos', 'total_combustible', 'total_nominas', 'total_mantenimientos', 'total_gastos_viajes', 'total_ingresos', 'diferencia'];
+  const headers = ['anio', 'mes', 'placa', 'total_gastos', 'total_combustible', 'total_nominas', 'total_mantenimientos', 'total_gastos_viajes', 'total_ingresos', 'diferencia'];
   
   const resumenes = rows.map(row =>
     Object.fromEntries(row.map((val, i) => [headers[i], val]))
   );
 
-  return resumenes.filter(r => r.placa === placa && r.año === año.toString());
+  return resumenes.filter(r => r.placa === placa && r.anio === anio.toString());
 };
 
 export const resumenVehiculoHelper = {

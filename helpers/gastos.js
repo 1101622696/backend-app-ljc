@@ -13,6 +13,27 @@ const getSiguienteConsecutivo = async () => {
   return `G-${numero + 1}`;
 };
 
+const getGastoById = async (consecutivo) => {
+  const gastos = await getGastosVehiculos();
+  return gastos.find(gasto => 
+    gasto.consecutivo && gasto.consecutivo.toLowerCase() === consecutivo.toLowerCase()
+  );
+};
+
+const ordenarGastosPorCampoNumerico = (gastos, campo, orden = 'desc') => {
+  return gastos.sort((a, b) => {
+    const valorA = parseFloat(a[campo]) || 0;
+    const valorB = parseFloat(b[campo]) || 0;
+    
+    return orden.toLowerCase() === 'desc' ? valorB - valorA : valorA - valorB;
+  });
+};
+
+const getVehiculoOrdenadosPorValor = async (orden = 'desc') => {
+  const gastos = await getGastosVehiculos();
+  return ordenarGastosPorCampoNumerico(gastos, 'valor_gasto', orden);
+};
+
 const getGastosVehiculos = async () => {
   const sheets = getSheetsClient();
   const res = await sheets.spreadsheets.values.get({
@@ -61,5 +82,7 @@ const registrarGasto = async ({ placa, tipo_gasto, codigo_referencia, valor_gast
 export const gastosVehiculoHelper = {
   getSiguienteConsecutivo,
   getGastosVehiculos,
+  getGastoById,
+  getVehiculoOrdenadosPorValor,
   registrarGasto
 };

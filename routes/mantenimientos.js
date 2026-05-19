@@ -11,6 +11,8 @@ const upload = multer({ storage: multer.memoryStorage() });
 router.get("/",[validarJWT],httpMantenimientos.obtenerMantenimientos)
 router.get('/obtenerdatosmantenimiento/:consecutivo',[validarJWT], httpMantenimientos.obtenerMantenimientoPorConsecutivo);
 router.get('/resumen-solicitante', [validarJWT], httpMantenimientos.obtenerResumenSolicitante); 
+router.get("/ordenados", [validarJWT], httpMantenimientos.obtenerMantenimientosOrdenados);
+router.get("/filtrados", [validarJWT], httpMantenimientos.obtenerMantenimientosFiltrados);
 
 router.post("/crear", [validarJWT, upload.array('archivos')], httpMantenimientos.crearMantenimiento);
 

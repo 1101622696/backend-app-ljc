@@ -1,5 +1,28 @@
 import { viajeHelper } from '../helpers/viajes.js';
 import { vehiculoHelper } from '../helpers/vehiculos.js';
+import { detalleGastosViajesHelper } from '../helpers/detalles_gastos.js';
+
+const ORDENAMIENTO_HANDLERS = {
+  anticipo_conductor: viajeHelper.getViajesOrdenadosPorAnticipoConductor,
+  diezpcto: viajeHelper.getViajesOrdenadosPorDiezPcto,
+  fecha_inicio: viajeHelper.getViajesOrdenadosPorFechaInicio,
+  fecha_fin: viajeHelper.getViajesOrdenadosPorFechaFin,
+  ganancia_estimada: viajeHelper.getViajesOrdenadosPorGananciaEstimada,
+  ganancia_real: viajeHelper.getViajesOrdenadosPorGananciaReal,
+  valor_gastos_conductor: viajeHelper.getViajesOrdenadosPorGastosConductor,
+  valor_gastos_propietario: viajeHelper.getViajesOrdenadosPorGastosPropietario,
+  valor_tonelada_inicial: viajeHelper.getViajesOrdenadosPorValorToneladaInicial,
+  valor_tonelada_final: viajeHelper.getViajesOrdenadosPorValorToneladaFinal,
+  valor_viaje_real: viajeHelper.getViajesOrdenadosPorValorViajeReal,
+};
+
+const FILTRO_HANDLERS = {
+  estado: viajeHelper.getViajesPorEstadoSaldoCliente,
+  estado_viaje: viajeHelper.getViajesPorEstadoViaje
+};
+
+const TIPOS_ORDENAMIENTO = Object.keys(ORDENAMIENTO_HANDLERS);
+const TIPOS_FILTRO = Object.keys(FILTRO_HANDLERS);
 
 const httpViajes = {
 
@@ -78,7 +101,7 @@ crearViaje: async (req, res) => {
   } 
 },
 
-  obtenerViajes: async (req, res) => {
+obtenerViajes: async (req, res) => {
     try {
       const data = await viajeHelper.getViajes();
       res.json(data);
@@ -86,7 +109,7 @@ crearViaje: async (req, res) => {
       console.error('Error al obtener datos:', error);
       res.status(500).json({ mensaje: 'Error al obtener viajes' });
     }
-  },
+},
 
 obtenerResumenSolicitante: async (req, res) => {
   try {
@@ -110,6 +133,45 @@ obtenerResumenSolicitante: async (req, res) => {
     });
   } catch (error) {
     console.error('Error al obtener resumen por email:', error);
+    res.status(500).json({
+      ok: false,
+      mensaje: 'Error interno del servidor',
+      error: error.message
+    });
+  }
+},
+
+obtenerResumenPorPlaca: async (req, res) => {
+  try {
+    const { perfil, placa_asignada } = req.usuariobdtoken;
+
+    let placas = [];
+
+    if (perfil === 'administrador') {
+      placas = null; // null = traer todos
+    } else {
+      if (!placa_asignada) {
+        return res.status(400).json({
+          ok: false,
+          mensaje: 'No tienes placas asignadas'
+        });
+      }
+
+      placas = placa_asignada
+        .split(',')
+        .map(p => p.trim().toLowerCase());
+    }
+
+    const resumen = await viajeHelper.getResumenViajesPorPlaca(placas);
+
+    res.json({
+      ok: true,
+      resumen,
+      mensaje: 'Resumen por placa obtenido correctamente'
+    });
+
+  } catch (error) {
+    console.error('Error al obtener viajes por placa:', error);
     res.status(500).json({
       ok: false,
       mensaje: 'Error interno del servidor',
@@ -333,8 +395,109 @@ obtenerGastosViaje: async (req, res) => {
   }
 },
 
+listarArchivosCarpeta: async (req, res) => {
+  try {
+    const { folderId, fileId } = req.query;
+
+    const archivos = await detalleGastosViajesHelper.listarArchivosCarpeta({
+      folderId,
+      fileId
+    });
+
+    res.json(archivos);
+
+  } catch (error) {
+    console.error('Error al listar archivos:', error);
+
+    res.status(500).json({
+      mensaje: 'Error al listar archivos',
+      error: error.message
+    });
+  }
+},
+
+servirArchivo: async (req, res) => {
+  try {
+    const { fileId } = req.params;
+
+    const { nombre, mimeType, stream } =
+      await detalleGastosViajesHelper.obtenerStreamArchivo(fileId);
+
+    res.setHeader('Content-Type', mimeType);
+    res.setHeader('Content-Disposition', `inline; filename="${nombre}"`);
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+
+    stream.pipe(res);
+
+  } catch (error) {
+    console.error('Error al servir archivo:', error);
+
+    res.status(500).json({
+      mensaje: 'Error al obtener archivo'
+    });
+  }
+},
+
+obtenerViajesOrdenados: async (req, res) => {
+  try {
+    const { tipo = "tiempo", orden = "desc" } = req.query;
+    
+    if (orden !== "asc" && orden !== "desc") {
+      return res
+        .status(400)
+        .json({ mensaje: 'El parámetro orden debe ser "asc" o "desc"' });
+    }
+    
+    const tipoLower = tipo.toLowerCase();
+    if (!TIPOS_ORDENAMIENTO.includes(tipoLower)) {
+      return res
+        .status(400)
+        .json({ 
+          mensaje: `El parámetro tipo debe ser uno de: ${TIPOS_ORDENAMIENTO.join(', ')}`,
+          tiposPermitidos: TIPOS_ORDENAMIENTO
+        });
+    }
+    
+    const handlerFn = ORDENAMIENTO_HANDLERS[tipoLower];
+    const viajes = await handlerFn(orden);
+    
+    res.json(viajes);
+  } catch (error) {
+    console.error("Error al obtener viajes ordenados:", error);
+    res.status(500).json({ mensaje: "Error al obtener viajes" });
+  }
+},
+
+obtenerViajesFiltrados: async (req, res) => {
+  try {
+    const { tipo, valor } = req.query;
+    
+    if (!tipo || !valor) {
+      return res
+        .status(400)
+        .json({ mensaje: 'Se requieren los parámetros tipo y valor' });
+    }
+    
+    const tipoLower = tipo.toLowerCase();
+    if (!TIPOS_FILTRO.includes(tipoLower)) {
+      return res
+        .status(400)
+        .json({ 
+          mensaje: `El parámetro tipo debe ser uno de: ${TIPOS_FILTRO.join(', ')}`,
+          tiposPermitidos: TIPOS_FILTRO
+        });
+    }
+    
+    const handlerFn = FILTRO_HANDLERS[tipoLower];
+    const viajes = await handlerFn(valor);
+    
+    res.json(viajes);
+  } catch (error) {
+    console.error("Error al obtener viajes filtrados:", error);
+    res.status(500).json({ mensaje: "Error al obtener viajes", error: error.message });
+  }
+},
+
 }
-
-
 
 export default httpViajes;

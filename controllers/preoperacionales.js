@@ -187,7 +187,7 @@ crearPreoperacional: async (req, res) => {
   } 
 },
 
-  obtenerPreoperacionales: async (req, res) => {
+obtenerPreoperacionales: async (req, res) => {
     try {
       const data = await preoperacionalHelper.getPreoperacionales();
       res.json(data);
@@ -195,7 +195,7 @@ crearPreoperacional: async (req, res) => {
       console.error('Error al obtener datos:', error);
       res.status(500).json({ mensaje: 'Error al obtener preoperacionales' });
     }
-  },
+},
 
 obtenerResumenSolicitante: async (req, res) => {
   try {
@@ -267,7 +267,6 @@ editarPreoperacional: async (req, res) => {
     res.status(500).json({ mensaje: 'Error interno del servidor' });
   }
 },
-
 
 }
 

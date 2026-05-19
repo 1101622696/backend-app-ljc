@@ -1,6 +1,19 @@
 import { mantenimientoHelper } from '../helpers/mantenimientos.js';
 import { vehiculoHelper } from '../helpers/vehiculos.js';
 
+const ORDENAMIENTO_HANDLERS = {
+  valor: mantenimientoHelper.getMantenimientosOrdenadosPorValor,
+  fecha: mantenimientoHelper.getMantenimientosOrdenadosPorFechaRegistro,
+};
+
+const FILTRO_HANDLERS = {
+  tipo: mantenimientoHelper.getMantenimientosPorTipo,
+  placa: mantenimientoHelper.getMantenimientosPorPlaca
+};
+
+const TIPOS_ORDENAMIENTO = Object.keys(ORDENAMIENTO_HANDLERS);
+const TIPOS_FILTRO = Object.keys(FILTRO_HANDLERS);
+
 const httpMantenimientos = {
 
 crearMantenimiento: async (req, res) => {
@@ -114,9 +127,9 @@ crearMantenimiento: async (req, res) => {
     console.error('Error al guardar solicitud:', error); 
     res.status(500).json({ mensaje: 'Error interno del servidor' }); 
   } 
-  },
+},
 
-  obtenerMantenimientos: async (req, res) => {
+obtenerMantenimientos: async (req, res) => {
     try {
       const data = await mantenimientoHelper.getMantenimientos();
       res.json(data);
@@ -124,7 +137,7 @@ crearMantenimiento: async (req, res) => {
       console.error('Error al obtener datos:', error);
       res.status(500).json({ mensaje: 'Error al obtener mantenimientos' });
     }
-  },
+},
 
 obtenerResumenSolicitante: async (req, res) => {
   try {
@@ -169,6 +182,66 @@ obtenerMantenimientoPorConsecutivo: async (req, res) => {
   } catch (error) {
     console.error('Error al obtener mantenimiento:', error);
     res.status(500).json({ mensaje: 'Error al obtener mantenimiento' });
+  }
+},
+
+obtenerMantenimientosOrdenados: async (req, res) => {
+  try {
+    const { tipo = "tiempo", orden = "desc" } = req.query;
+    
+    if (orden !== "asc" && orden !== "desc") {
+      return res
+        .status(400)
+        .json({ mensaje: 'El parámetro orden debe ser "asc" o "desc"' });
+    }
+    
+    const tipoLower = tipo.toLowerCase();
+    if (!TIPOS_ORDENAMIENTO.includes(tipoLower)) {
+      return res
+        .status(400)
+        .json({ 
+          mensaje: `El parámetro tipo debe ser uno de: ${TIPOS_ORDENAMIENTO.join(', ')}`,
+          tiposPermitidos: TIPOS_ORDENAMIENTO
+        });
+    }
+    
+    const handlerFn = ORDENAMIENTO_HANDLERS[tipoLower];
+    const mantenimientos = await handlerFn(orden);
+    
+    res.json(mantenimientos);
+  } catch (error) {
+    console.error("Error al obtener mantenimientos ordenados:", error);
+    res.status(500).json({ mensaje: "Error al obtener mantenimientos" });
+  }
+},
+
+obtenerMantenimientosFiltrados: async (req, res) => {
+  try {
+    const { tipo, valor } = req.query;
+    
+    if (!tipo || !valor) {
+      return res
+        .status(400)
+        .json({ mensaje: 'Se requieren los parámetros tipo y valor' });
+    }
+    
+    const tipoLower = tipo.toLowerCase();
+    if (!TIPOS_FILTRO.includes(tipoLower)) {
+      return res
+        .status(400)
+        .json({ 
+          mensaje: `El parámetro tipo debe ser uno de: ${TIPOS_FILTRO.join(', ')}`,
+          tiposPermitidos: TIPOS_FILTRO
+        });
+    }
+    
+    const handlerFn = FILTRO_HANDLERS[tipoLower];
+    const mantenimientos = await handlerFn(valor);
+    
+    res.json(mantenimientos);
+  } catch (error) {
+    console.error("Error al obtener mantenimientos filtrados:", error);
+    res.status(500).json({ mensaje: "Error al obtener mantenimientos", error: error.message });
   }
 },
 

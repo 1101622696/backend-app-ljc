@@ -134,13 +134,13 @@ crearVehiculo: async (req, res) => {
       placa: resultado.placa, 
     });
   }
-} catch (error) { 
+ } catch (error) { 
       console.error('Error al guardar vehiculo:', error);
       res.status(500).json({ mensaje: 'Error interno del servidor' });
     }
-  },
+},
   
-  obtenerVehiculos: async (req, res) => {
+obtenerVehiculos: async (req, res) => {
     try {
       const data = await vehiculoHelper.getVehiculos();
       res.json(data);
@@ -148,8 +148,9 @@ crearVehiculo: async (req, res) => {
       console.error('Error al obtener datos:', error);
       res.status(500).json({ mensaje: 'Error al obtener Vehiculos' });
     }
-  },
-  obtenerVehiculosActivos: async (req, res) => {
+},
+  
+obtenerVehiculosActivos: async (req, res) => {
     try {
       const data = await vehiculoHelper.getVehiculoByStatus('activo');
       res.json(data);
@@ -157,9 +158,9 @@ crearVehiculo: async (req, res) => {
       console.error('Error al obtener datos:', error);
       res.status(500).json({ mensaje: 'Error al obtener vehiculos activos' });
     }
-  },
+},
 
-    obtenerVehiculosInactivos: async (req, res) => {
+obtenerVehiculosInactivos: async (req, res) => {
     try {
       const data = await vehiculoHelper.getVehiculoByStatus('inactivo');
       res.json(data);
@@ -167,9 +168,9 @@ crearVehiculo: async (req, res) => {
       console.error('Error al obtener datos:', error);
       res.status(500).json({ mensaje: 'Error al obtener Vehiculos inactivos' });
     }
-  },
+},
 
-   obtenerVehiculosOrdenados: async (req, res) => {
+obtenerVehiculosOrdenados: async (req, res) => {
   try {
     const { tipo = "tiempo", orden = "desc" } = req.query;
     
@@ -199,12 +200,9 @@ crearVehiculo: async (req, res) => {
   }
 },
 
-  obtenerVehiculosFiltrados: async (req, res) => {
+obtenerVehiculosFiltrados: async (req, res) => {
   try {
     const { tipo, valor } = req.query;
-    
-    // console.log("Parámetros recibidos:", req.query);
-    // console.log(`tipo: "${tipo}", valor: "${valor}"`);
     
     if (!tipo || !valor) {
       return res
@@ -232,7 +230,7 @@ crearVehiculo: async (req, res) => {
   }
 },
 
-  obtenerVehiculoporPlaca: async (req, res) => {
+obtenerVehiculoporPlaca: async (req, res) => {
     try {
       const { placa } = req.params;
       const vehiculo = await vehiculoHelper.getVehiculoById(placa);
@@ -246,7 +244,7 @@ crearVehiculo: async (req, res) => {
       console.error('Error al obtener vehiculo:', error);
       res.status(500).json({ mensaje: 'Error al obtener vehiculo' });
     }
-  },
+},
 
 editarVehiculo: async (req, res) => {
   try {
@@ -380,5 +378,6 @@ desactivarVehiculo: async (req, res) => {
   }
 },
 
-  }
+}
+
 export default httpVehiculos;

@@ -7,6 +7,9 @@ const router=Router()
 const upload = multer({ storage: multer.memoryStorage() });
 
 router.get('/', [validarJWT], httpCombustible.listarCombustibles);
+router.get('/obtenerdatoscombustible/:consecutivo',[validarJWT], httpCombustible.obtenerCombustibleporConsecutivo);
+router.get("/ordenados", [validarJWT], httpCombustible.obtenerCombustiblesOrdenados);
+router.get("/filtrados", [validarJWT], httpCombustible.obtenerCombustiblesFiltrados);
 
 router.post('/crear', [validarJWT, upload.array('archivos')], httpCombustible.registrarCombustible);
 

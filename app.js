@@ -1,6 +1,6 @@
 import express from "express";
 import 'dotenv/config';
-import dbConexion from "./database/cnxmongoose.js";
+// import dbConexion from "./database/cnxmongoose.js";
 import cors from "cors";
 import usuarios from "./routes/usuarios.js"
 import solicitudes from "./routes/solicitudes.js"
@@ -50,10 +50,16 @@ app.use("/api/gastos",gastos)
 app.use("/api/resumenvehiculo",resumenvehiculo)
 app.use("/api/health", health)
 
+// const PORT = process.env.PORT || 4000;
+// app.listen(PORT, () => {
+//     console.log(`Servidor escuchando en el puerto ${PORT}`);
+//     dbConexion();
+// });
+
 const PORT = process.env.PORT || 4000;
+
 app.listen(PORT, () => {
-    console.log(`Servidor escuchando en el puerto ${PORT}`);
-    dbConexion();
+  console.log(`Servidor escuchando en el puerto ${PORT}`);
 });
 
 export default app;

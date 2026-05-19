@@ -4,11 +4,14 @@ import { getDriveClient, getSheetsClient } from '../services/google.js';
 const spreadsheetId = process.env.SPREADSHEET_ID;
 const carpetaPadreId = process.env.CARPETA_PADRE_ID_MANTENIMIENTOS;
 
-const obtenerDatosMantenimiento = async (nombreHoja, rango = 'A1:J1000') => {
+const obtenerDatosMantenimiento = async () => {
   const sheets = getSheetsClient();
+  
+  const range = 'Mantenimientos!A1:J100'; 
+
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId,
-    range: `${nombreHoja}!${rango}`,
+    range,
   });
 
   const rows = res.data.values;
@@ -20,16 +23,7 @@ const obtenerDatosMantenimiento = async (nombreHoja, rango = 'A1:J1000') => {
   );
 };
 
-const getMantenimientos = async () => {
-  const mantenimientos = await obtenerDatosMantenimiento('Mantenimientos');
-  
-  return mantenimientos.sort((a, b) => {
-    const numA = parseInt(a.consecutivo.replace(/\D/g, ''), 10);
-    const numB = parseInt(b.consecutivo.replace(/\D/g, ''), 10);
-    
-    return numB - numA;
-  });
-};
+const getMantenimientos = () => obtenerDatosMantenimiento();
 
 const getSiguienteConsecutivo = async () => {
   const mantenimientos = await getMantenimientos();
@@ -65,6 +59,47 @@ const getMantenimientosByConsecutivo = async (consecutivo) => {
   return mantenimientos.find(mantenimiento => 
     mantenimiento.consecutivo && mantenimiento.consecutivo.toLowerCase() === consecutivo.toLowerCase()
   );
+};
+
+const filtrarMantenimientosPorCampoTexto = (mantenimientos, campo, valor) => {
+  return mantenimientos.filter(mantenimiento => 
+    mantenimiento[campo] && mantenimiento[campo].toLowerCase() === valor.toLowerCase()
+  );
+};
+
+const ordenarMantenimientosPorCampoNumerico = (mantenimientos, campo, orden = 'desc') => {
+  return mantenimientos.sort((a, b) => {
+    const valorA = parseFloat(a[campo]) || 0;
+    const valorB = parseFloat(b[campo]) || 0;
+    
+    return orden.toLowerCase() === 'desc' ? valorB - valorA : valorA - valorB;
+  });
+};
+
+const getMantenimientosPorTipo = async (valor) => {
+  const mantenimientos = await getMantenimientos();
+  return filtrarMantenimientosPorCampoTexto(mantenimientos, 'tipo_mantenimiento', valor);
+};
+
+const getMantenimientosOrdenadosPorFechaRegistro = async (orden = 'desc') => {
+  const mantenimientos = await getMantenimientos();
+  
+  return mantenimientos.sort((a, b) => {
+    const fechaA = new Date(a.fecha_creacion || 0);
+    const fechaB = new Date(b.fecha_creacion || 0);
+    
+    return orden.toLowerCase() === 'desc' ? fechaB - fechaA : fechaA - fechaB;
+  });
+};
+
+const getMantenimientosPorPlaca = async (valor) => {
+  const mantenimientos = await getMantenimientos();
+  return filtrarMantenimientosPorCampoTexto(mantenimientos, 'placa', valor);
+};
+
+const getMantenimientosOrdenadosPorValor = async (orden = 'desc') => {
+  const mantenimientos = await getMantenimientos();
+  return ordenarMantenimientosPorCampoNumerico(mantenimientos, 'valor_mantenimiento', orden);
 };
 
 const getResumenMantenimientosPorSolicitante = async (email) => {
@@ -250,6 +285,10 @@ export const mantenimientoHelper = {
   guardarMantenimiento,
   getSiguienteConsecutivo,  
   getMantenimientosByConsecutivo,
+  getMantenimientosOrdenadosPorValor,
+  getMantenimientosPorTipo,
+  getMantenimientosOrdenadosPorFechaRegistro,
+  getMantenimientosPorPlaca,
   getResumenMantenimientosPorSolicitante,
   editarMantenimientoporConsecutivo,
   procesarArchivos,

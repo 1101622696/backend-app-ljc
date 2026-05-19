@@ -63,7 +63,7 @@ const filtrarVehiculosPorCampoTexto = (vehiculos, campo, valor) => {
 
 const getVehiculosPorEstado = async (valor) => {
   const vehiculos = await getVehiculos();
-  return filtrarVehiculosPorCampoTexto(vehiculos, estado, valor);
+  return filtrarVehiculosPorCampoTexto(vehiculos, 'estado', valor);
 };
 
 const ordenarVehiculosPorCampoNumerico = (vehiculos, campo, orden = 'desc') => {
@@ -110,12 +110,12 @@ const getVehiculosOrdenadosPorFechaTecnico = async (orden = 'desc') => {
 
 const getVehiculoOrdenadosPorViajes = async (orden = 'desc') => {
   const vehiculos = await getVehiculos();
-  return ordenarVehiculosPorCampoNumerico(vehiculos, "viajes", orden);
+  return ordenarVehiculosPorCampoNumerico(vehiculos, 'viajes', orden);
 };
 
 const getVehiculoOrdenadosPorDistancia = async (orden = 'desc') => {
   const vehiculos = await getVehiculos();
-  return ordenarVehiculosPorCampoNumerico(vehiculos, "odometro", orden);
+  return ordenarVehiculosPorCampoNumerico(vehiculos, 'odometro', orden);
 };
 
 const editarVehiculoporPlaca = async (placa, nuevosDatos) => {
@@ -306,7 +306,6 @@ const actualizarEstadoEnSheets = async (placa, nuevoEstado = "activo") => {
   }
 };
 
-// Función auxiliar para convertir número de columna a letra
 function getColumnLetter(columnNumber) {
   let columnLetter = '';
   while (columnNumber > 0) {

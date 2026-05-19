@@ -5,11 +5,12 @@ import { clienteHelper } from '../helpers/clientes.js';
 import { prestamoHelper } from '../helpers/prestamos.js';
 import { gastosVehiculoHelper } from '../helpers/gastos.js';
 import { detalleGastosViajesHelper } from '../helpers/detalles_gastos.js';
+import { get } from 'http';
 
 const spreadsheetId = process.env.SPREADSHEET_ID;
 const carpetaPadreId = process.env.CARPETA_PADRE_ID_VIAJES;
 
-const obtenerDatosViaje = async (nombreHoja, rango = 'A1:BB1000') => {
+const obtenerDatosViaje = async (nombreHoja, rango = 'A1:AN1000') => {
   const sheets = getSheetsClient();
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId,
@@ -34,6 +35,179 @@ const getViajes = async () => {
     
     return numB - numA;
   });
+};
+
+const getViajesByConsecutivo = async (consecutivo) => {
+  const viajes = await getViajes();
+  return viajes.find(viaje => 
+    viaje.consecutivo && viaje.consecutivo.toLowerCase() === consecutivo.toLowerCase()
+  );
+};
+
+const filtrarViajesPorCampoTexto = (viajes, campo, valor) => {
+  return viajes.filter(viaje => 
+    viaje[campo] && viaje[campo].toLowerCase() === valor.toLowerCase()
+  );
+};
+
+const getViajesPorEstadoSaldoCliente = async (valor) => {
+  const viajes = await getViajes();
+  return filtrarViajesPorCampoTexto(viajes, 'estado_saldo_cliente', valor);
+};
+
+const getViajesPorEstadoViaje = async (valor) => {
+  const viajes = await getViajes();
+  return filtrarViajesPorCampoTexto(viajes, 'estado_viaje', valor);
+};
+
+const ordenarViajesPorCampoNumerico = (viajes, campo, orden = 'desc') => {
+  return viajes.sort((a, b) => {
+    const valorA = parseFloat(a[campo]) || 0;
+    const valorB = parseFloat(b[campo]) || 0;
+    
+    return orden.toLowerCase() === 'desc' ? valorB - valorA : valorA - valorB;
+  });
+};
+
+const getViajesOrdenadosPorFechaInicio = async (orden = 'desc') => {
+  const viajes = await getViajes();
+  
+  return viajes.sort((a, b) => {
+    const fechaA = new Date(a.fecha_inicio || 0);
+    const fechaB = new Date(b.fecha_inicio || 0);
+    
+    return orden.toLowerCase() === 'desc' ? fechaB - fechaA : fechaA - fechaB;
+  });
+};
+
+const getViajesOrdenadosPorFechaFin = async (orden = 'desc') => {
+  const viajes = await getViajes();
+  
+  return viajes.sort((a, b) => {
+    const fechaA = new Date(a.fecha_fin_viaje || 0);
+    const fechaB = new Date(b.fecha_fin_viaje || 0);
+    
+    return orden.toLowerCase() === 'desc' ? fechaB - fechaA : fechaA - fechaB;
+  });
+};
+
+const getViajesOrdenadosPorValorViajeReal = async (orden = 'desc') => {
+  const viajes = await getViajes();
+  return ordenarViajesPorCampoNumerico(viajes, 'valor_viaje_real', orden);
+};
+
+const getViajesOrdenadosPorValorToneladaInicial = async (orden = 'desc') => {
+  const viajes = await getViajes();
+  return ordenarViajesPorCampoNumerico(viajes, 'valor_tonelada_inicial', orden);
+};
+
+const getViajesOrdenadosPorValorToneladaFinal = async (orden = 'desc') => {
+  const viajes = await getViajes();
+  return ordenarViajesPorCampoNumerico(viajes, 'valor_tonelada_final', orden);
+};
+
+const getViajesOrdenadosPorDiezPcto = async (orden = 'desc') => {
+  const viajes = await getViajes();
+  return ordenarViajesPorCampoNumerico(viajes, 'diez_pcto', orden);
+};
+
+const getViajesOrdenadosPorAnticipoConductor = async (orden = 'desc') => {
+  const viajes = await getViajes();
+  return ordenarViajesPorCampoNumerico(viajes, 'valor_anticipo_conductor', orden);
+};
+
+const getViajesOrdenadosPorGastosConductor = async (orden = 'desc') => {
+  const viajes = await getViajes();
+  return ordenarViajesPorCampoNumerico(viajes, 'total_gastos_conductor', orden);
+};
+
+const getViajesOrdenadosPorGastosPropietario = async (orden = 'desc') => {
+  const viajes = await getViajes();
+  return ordenarViajesPorCampoNumerico(viajes, 'total_gastos_propietario', orden);
+};
+
+const getViajesOrdenadosPorGananciaEstimada = async (orden = 'desc') => {
+  const viajes = await getViajes();
+  return ordenarViajesPorCampoNumerico(viajes, 'ganancia_viaje_estimada', orden);
+};
+
+const getViajesOrdenadosPorGananciaReal = async (orden = 'desc') => {
+  const viajes = await getViajes();
+  return ordenarViajesPorCampoNumerico(viajes, 'ganancia_viaje_real', orden);
+};
+
+const getResumenViajesPorSolicitante = async (email) => {
+  try {
+    const todoslosViajes = await getViajes();
+    const viajesFiltrados = todoslosViajes.filter(s => s.correo_usuario  === email);
+
+    const mapConDatos = (lista) => {
+      return lista.map(r => ({
+        consecutivo: r.consecutivo,
+        fecha_creacion: r.fecha_creacion || '',
+        correo_usuario : r.correo_usuario || '',
+        usuario: r.usuario || '',
+        placa: r.placa || '',
+        cliente: r.cliente || '',
+        destino: r.destino || '',
+        fecha_inicio: r.fecha_inicio || '',
+        estado_viaje: r.estado_viaje || '',
+      }));  
+    };
+
+    return {
+      total: {
+        count: viajesFiltrados.length,
+        consecutivos: mapConDatos(viajesFiltrados)
+      }
+    };
+  } catch (error) {
+    console.error('Error al obtener resumen de preoperacionales por email:', error);
+    throw error;
+  }
+};
+
+const getResumenViajesPorPlaca = async (placas) => {
+  try {
+    const todoslosViajes = await getViajes();
+
+    let viajesFiltrados;
+
+    if (!placas) {
+      // administrador → todos
+      viajesFiltrados = todoslosViajes;
+    } else {
+      viajesFiltrados = todoslosViajes.filter(v =>
+        v.placa && placas.includes(v.placa.toLowerCase())
+      );
+    }
+
+    const mapConDatos = (lista) => {
+      return lista.map(r => ({
+        consecutivo: r.consecutivo,
+        fecha_creacion: r.fecha_creacion || '',
+        correo_usuario: r.correo_usuario || '',
+        usuario: r.usuario || '',
+        placa: r.placa || '',
+        cliente: r.cliente || '',
+        destino: r.destino || '',
+        fecha_inicio: r.fecha_inicio || '',
+        estado_viaje: r.estado_viaje || '',
+        estado_preoperacional: r.estado_preoperacional || '',
+      }));
+    };
+
+    return {
+      total: {
+        count: viajesFiltrados.length,
+        viajes: mapConDatos(viajesFiltrados)
+      }
+    };
+
+  } catch (error) {
+    console.error('Error en getResumenViajesPorPlaca:', error);
+    throw error;
+  }
 };
 
 const getSiguienteConsecutivo = async () => {
@@ -105,44 +279,6 @@ const guardarAnticipo = async ({ placa, cliente, destino, fecha_inicio, valor_an
   });
 
   return { consecutivo };
-};
-
-const getViajesByConsecutivo = async (consecutivo) => {
-  const viajes = await getViajes();
-  return viajes.find(viaje => 
-    viaje.consecutivo && viaje.consecutivo.toLowerCase() === consecutivo.toLowerCase()
-  );
-};
-
-const getResumenViajesPorSolicitante = async (email) => {
-  try {
-    const todoslosViajes = await getViajes();
-    const viajesFiltrados = todoslosViajes.filter(s => s.correo_usuario  === email);
-
-    const mapConDatos = (lista) => {
-      return lista.map(r => ({
-        consecutivo: r.consecutivo,
-        fecha_creacion: r.fecha_creacion || '',
-        correo_usuario : r.correo_usuario || '',
-        usuario: r.usuario || '',
-        placa: r.placa || '',
-        cliente: r.cliente || '',
-        destino: r.destino || '',
-        fecha_inicio: r.fecha_inicio || '',
-        estado_viaje: r.estado_viaje || '',
-      }));  
-    };
-
-    return {
-      total: {
-        count: viajesFiltrados.length,
-        consecutivos: mapConDatos(viajesFiltrados)
-      }
-    };
-  } catch (error) {
-    console.error('Error al obtener resumen de preoperacionales por email:', error);
-    throw error;
-  }
 };
 
 const cerrarViajeYGastosConductor = async (consecutivo, datos, archivos) => {
@@ -370,6 +506,8 @@ const aprobarViajeYGastosPropietario = async (consecutivo, datos, archivos) => {
     descripcion: `Gastos propietario viaje ${consecutivo}`,
     fecha_registro: new Date().toISOString().split('T')[0]
   });
+
+    await actualizarContadoresViaje(consecutivo);
 
   return {
     saldo_pendiente_cliente_real,
@@ -626,7 +764,7 @@ const editarViajePorConsecutivo = async (consecutivo, nuevosDatos) => {
 
   const response = await sheets.spreadsheets.values.get({
     spreadsheetId,
-    range: 'Viajes!A2:BB1000',
+    range: 'Viajes!A2:AN1000',
   });
 
   const filas = response.data.values;
@@ -1030,12 +1168,116 @@ const contarViajesPorPlaca = async (placa) => {
   ).length;
 };
 
+const actualizarContadoresViaje = async (consecutivo) => {
+  const sheets = getSheetsClient();
+
+  // 1. Obtener datos del viaje
+  const responseViajes = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: 'Viajes!A2:AM1000',
+  });
+  const filas = responseViajes.data.values;
+  const viaje = filas.find(f => f[0]?.toLowerCase() === consecutivo.toLowerCase());
+  
+  if (!viaje) return;
+
+  const placa = viaje[1]; // Columna B
+  const codigoCliente = viaje[2]; // Columna C
+  const correoUsuario = viaje[34]; // Columna AI (correo_usuario)
+
+  // 2. Actualizar CLIENTES
+  const responseClientes = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: 'Clientes!A1:N100',
+  });
+  const filasClientes = responseClientes.data.values;
+  const headersClientes = filasClientes[0].map(h => h.trim().toLowerCase());
+  const indiceCodigoCliente = headersClientes.indexOf('codigo');
+  const indiceViajesCliente = headersClientes.indexOf('viajes');
+
+  const filaClienteIndex = filasClientes.slice(1).findIndex(f => f[indiceCodigoCliente] === codigoCliente);
+  if (filaClienteIndex !== -1) {
+    const filaCliente = filasClientes[filaClienteIndex + 1];
+    const viajesActuales = parseInt(filaCliente[indiceViajesCliente] || 0);
+    filaCliente[indiceViajesCliente] = viajesActuales + 1;
+    
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `Clientes!A${filaClienteIndex + 2}:N${filaClienteIndex + 2}`,
+      valueInputOption: 'RAW',
+      requestBody: { values: [filaCliente] },
+    });
+  }
+
+  // 3. Actualizar VEHICULOS
+  const responseVehiculos = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: 'Vehiculos!A1:AC100',
+  });
+  const filasVehiculos = responseVehiculos.data.values;
+  const headersVehiculos = filasVehiculos[0].map(h => h.trim().toLowerCase());
+  const indicePlacaVehiculo = headersVehiculos.indexOf('placa');
+  const indiceViajesVehiculo = headersVehiculos.indexOf('viajes');
+
+  const filaVehiculoIndex = filasVehiculos.slice(1).findIndex(f => f[indicePlacaVehiculo] === placa);
+  if (filaVehiculoIndex !== -1) {
+    const filaVehiculo = filasVehiculos[filaVehiculoIndex + 1];
+    const viajesActuales = parseInt(filaVehiculo[indiceViajesVehiculo] || 0);
+    filaVehiculo[indiceViajesVehiculo] = viajesActuales + 1;
+    
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `Vehiculos!A${filaVehiculoIndex + 2}:AC${filaVehiculoIndex + 2}`,
+      valueInputOption: 'RAW',
+      requestBody: { values: [filaVehiculo] },
+    });
+  }
+
+  // 4. Actualizar USUARIOS
+  const responseUsuarios = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: 'Usuarios!A1:AB15',
+  });
+  const filasUsuarios = responseUsuarios.data.values;
+  const headersUsuarios = filasUsuarios[0].map(h => h.trim().toLowerCase());
+  const indiceEmailUsuario = headersUsuarios.indexOf('email');
+  const indiceViajesRealizados = headersUsuarios.indexOf('viajes_realizados');
+
+  const filaUsuarioIndex = filasUsuarios.slice(1).findIndex(f => f[indiceEmailUsuario] === correoUsuario);
+  if (filaUsuarioIndex !== -1) {
+    const filaUsuario = filasUsuarios[filaUsuarioIndex + 1];
+    const viajesActuales = parseInt(filaUsuario[indiceViajesRealizados] || 0);
+    filaUsuario[indiceViajesRealizados] = viajesActuales + 1;
+    
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `Usuarios!A${filaUsuarioIndex + 2}:AB${filaUsuarioIndex + 2}`,
+      valueInputOption: 'RAW',
+      requestBody: { values: [filaUsuario] },
+    });
+  }
+};
+
 export const viajeHelper = {
   getViajes,
   guardarAnticipo,
   getSiguienteConsecutivo,  
   getViajesByConsecutivo,
   getResumenViajesPorSolicitante,
+  getResumenViajesPorPlaca,
+  getViajesOrdenadosPorAnticipoConductor,
+  getViajesOrdenadosPorDiezPcto,
+  getViajesOrdenadosPorFechaFin,
+  getViajesOrdenadosPorFechaInicio,
+  getViajesOrdenadosPorGananciaEstimada,
+  getViajesOrdenadosPorGananciaReal,
+  getViajesOrdenadosPorGastosConductor,
+  getViajesOrdenadosPorGastosPropietario,
+  getViajesOrdenadosPorValorToneladaFinal,
+  getViajesOrdenadosPorValorToneladaInicial,
+  getViajesOrdenadosPorValorViajeReal,
+  getViajesPorEstadoSaldoCliente,
+  getViajesPorEstadoViaje,
   editarViajePorConsecutivo,
   subirArchivosACarpetaExistente,
   buscarCarpetaPorNombre,
@@ -1048,6 +1290,6 @@ export const viajeHelper = {
   aprobarViajeYGastosPropietario,
   facturarViaje,
   subirManifiesto,
-  contarViajesPorPlaca
-
+  contarViajesPorPlaca,
+  actualizarContadoresViaje
 };

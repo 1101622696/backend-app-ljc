@@ -8,7 +8,7 @@ const generarJWT = (id, perfil, email, nombre, placa_asignada) => {
       payload,
       process.env.SECRETORPRIVATEKEY,
       {
-        expiresIn: '24h'
+        expiresIn: '365d'
       },
       (err, token) => {
         if (err) {

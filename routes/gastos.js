@@ -5,6 +5,8 @@ import {validarJWT} from '../middlewares/validar-jwt.js'
 const router=Router()
 
 router.get('/gastos-vehiculos', [validarJWT], httpGastosVehiculos.listarGastos);
+router.get('/obtenerdatosgasto/:consecutivo',[validarJWT], httpGastosVehiculos.obtenerGastoporConsecutivo);
+router.get("/ordenados", [validarJWT], httpGastosVehiculos.obtenerGastosOrdenados);
 
 router.post('/gastos-vehiculos', [validarJWT], httpGastosVehiculos.registrarGasto);
 

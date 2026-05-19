@@ -14,6 +14,4 @@ router.get('/resumen-solicitante', [validarJWT], httpSolicitudes.obtenerResumenS
 
 router.post("/crear", [validarJWT, upload.array('archivos')], httpSolicitudes.crearSolicitud);
 
-
-
 export default router

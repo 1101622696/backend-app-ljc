@@ -11,8 +11,18 @@ router.get("/",[validarJWT],httpViajes.obtenerViajes)
 router.get('/obtenerdatosviajes/:consecutivo',[validarJWT], httpViajes.obtenerViajePorConsecutivo);
 router.get('/calcular-nomina/:email', [validarJWT], httpViajes.calcularNomina);
 router.get('/resumen-solicitante', [validarJWT], httpViajes.obtenerResumenSolicitante); 
+router.get('/resumen-placa', [validarJWT], httpViajes.obtenerResumenPorPlaca);
 router.get('/facturar-cliente/:codigoCliente', [validarJWT], httpViajes.facturarCliente);
 router.get('/gastos/:consecutivo', [validarJWT], httpViajes.obtenerGastosViaje);
+
+router.get("/ordenados", [validarJWT], httpViajes.obtenerViajesOrdenados);
+router.get("/filtrados", [validarJWT], httpViajes.obtenerViajesFiltrados);
+
+// router.get('/drive-archivos', [validarJWT], httpViajes.listarArchivosCarpeta);
+// router.get('/drive-archivo/:fileId', [validarJWT], httpViajes.servirArchivo);
+
+router.get('/drive-archivos', httpViajes.listarArchivosCarpeta);
+router.get('/drive-archivo/:fileId', httpViajes.servirArchivo);
 
 router.post('/crear', [validarJWT], httpViajes.crearViaje);
 router.post('/aprobar-nomina/:email', [validarJWT], httpViajes.aprobarNomina);

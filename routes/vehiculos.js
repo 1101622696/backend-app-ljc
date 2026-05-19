@@ -22,5 +22,4 @@ router.put("/editar/:placa",[validarJWT, upload.array('archivos')], httpVehiculo
 router.put("/activar/:placa",[validarJWT],httpVehiculos.activarVehiculo)
 router.put("/desactivar/:placa",[validarJWT],httpVehiculos.desactivarVehiculo)
 
-
 export default router

@@ -4,11 +4,14 @@ import { getDriveClient, getSheetsClient } from '../services/google.js';
 const spreadsheetId = process.env.SPREADSHEET_ID;
 const carpetaPadreId = process.env.CARPETA_PADRE_ID_PRESTAMOS;
 
-const obtenerDatosPrestamo = async (nombreHoja, rango = 'A1:H1000') => {
+const obtenerDatosPrestamo = async () => {
   const sheets = getSheetsClient();
+  
+  const range = 'Prestamos!A1:H100'; 
+
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId,
-    range: `${nombreHoja}!${rango}`,
+    range,
   });
 
   const rows = res.data.values;
@@ -20,16 +23,7 @@ const obtenerDatosPrestamo = async (nombreHoja, rango = 'A1:H1000') => {
   );
 };
 
-const getPrestamos = async () => {
-  const prestamos = await obtenerDatosPrestamo('Prestamos');
-  
-  return prestamos.sort((a, b) => {
-    const numA = parseInt(a.consecutivo.replace(/\D/g, ''), 10);
-    const numB = parseInt(b.consecutivo.replace(/\D/g, ''), 10);
-    
-    return numB - numA;
-  });
-};
+const getPrestamos = () => obtenerDatosPrestamo();
 
 const getSiguienteConsecutivo = async () => {
   const prestamos = await getPrestamos();

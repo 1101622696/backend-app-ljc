@@ -1,5 +1,5 @@
 import jwt from 'jsonwebtoken';
-import {usuarioHelper}  from '../helpers/usuarios.js'; // asegúrate que sea exportada
+import {usuarioHelper}  from '../helpers/usuarios.js';
 
 const validarJWT = async (req, res, next) => {
     const token = req.header("x-token");

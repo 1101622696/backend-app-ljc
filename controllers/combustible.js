@@ -1,9 +1,25 @@
 import { combustibleHelper } from '../helpers/combustible.js';
 import { vehiculoHelper } from '../helpers/vehiculos.js';
 
+const ORDENAMIENTO_HANDLERS = {
+  galones: combustibleHelper.getCombustiblesOrdenadosPorGalones,
+  valor_pagado: combustibleHelper.getCombustiblesOrdenadosPorValorPagado,
+  precio_por_galon: combustibleHelper.getCombustiblesOrdenadosPorPrecioPorGalon,
+  rendimiento_real: combustibleHelper.getCombustiblesOrdenadosPorRendimientoReal,
+};
+
+const FILTRO_HANDLERS = {
+  alerta: combustibleHelper.getCombustiblesPorAlerta,
+  estado_factura: combustibleHelper.getCombustiblesPorEstadoFactura,
+  mes: combustibleHelper.getCombustiblesPorMes
+};
+
+const TIPOS_ORDENAMIENTO = Object.keys(ORDENAMIENTO_HANDLERS);
+const TIPOS_FILTRO = Object.keys(FILTRO_HANDLERS);
+
 const httpCombustible = {
 
-  registrarCombustible: async (req, res) => {
+registrarCombustible: async (req, res) => {
     try {
       const { email, nombre, perfil, placa_asignada } = req.usuariobdtoken;
       const { placa, odometro_actual, galones_cargados, valor_pagado } = req.body;
@@ -85,19 +101,95 @@ const httpCombustible = {
       console.error('Error al registrar combustible:', error);
       res.status(500).json({ mensaje: 'Error interno del servidor' });
     }
-  },
+},
 
-  listarCombustibles: async (req, res) => {
+listarCombustibles: async (req, res) => {
     try {
-      const combustibles = await combustibleHelper.getCombustibles();
-      res.json(combustibles);
+      const data = await combustibleHelper.getCombustibles();
+      res.json(data);
     } catch (error) {
-      console.error('Error al listar combustibles:', error);
+      console.error('Error al obtener datos:', error);
       res.status(500).json({ mensaje: 'Error al obtener combustibles' });
     }
-  },
+},
 
-  legalizarCombustible: async (req, res) => {
+obtenerCombustibleporConsecutivo: async (req, res) => {
+    try {
+      const { consecutivo } = req.params;
+      const combustible = await combustibleHelper.getCombustibleById(consecutivo);
+  
+      if (!combustible) {
+        return res.status(404).json({ mensaje: 'combustible no encontrado' });
+      }
+  
+      res.json(combustible);
+    } catch (error) {
+      console.error('Error al obtener combustible:', error);
+      res.status(500).json({ mensaje: 'Error al obtener combustible' });
+    }
+},
+
+obtenerCombustiblesOrdenados: async (req, res) => {
+  try {
+    const { tipo = "tiempo", orden = "desc" } = req.query;
+    
+    if (orden !== "asc" && orden !== "desc") {
+      return res
+        .status(400)
+        .json({ mensaje: 'El parámetro orden debe ser "asc" o "desc"' });
+    }
+    
+    const tipoLower = tipo.toLowerCase();
+    if (!TIPOS_ORDENAMIENTO.includes(tipoLower)) {
+      return res
+        .status(400)
+        .json({ 
+          mensaje: `El parámetro tipo debe ser uno de: ${TIPOS_ORDENAMIENTO.join(', ')}`,
+          tiposPermitidos: TIPOS_ORDENAMIENTO
+        });
+    }
+    
+    const handlerFn = ORDENAMIENTO_HANDLERS[tipoLower];
+    const combustibles = await handlerFn(orden);
+    
+    res.json(combustibles);
+  } catch (error) {
+    console.error("Error al obtener combustibles ordenados:", error);
+    res.status(500).json({ mensaje: "Error al obtener combustibles" });
+  }
+},
+
+obtenerCombustiblesFiltrados: async (req, res) => {
+  try {
+    const { tipo, valor } = req.query;
+    
+    if (!tipo || !valor) {
+      return res
+        .status(400)
+        .json({ mensaje: 'Se requieren los parámetros tipo y valor' });
+    }
+    
+    const tipoLower = tipo.toLowerCase();
+    if (!TIPOS_FILTRO.includes(tipoLower)) {
+      return res
+        .status(400)
+        .json({ 
+          mensaje: `El parámetro tipo debe ser uno de: ${TIPOS_FILTRO.join(', ')}`,
+          tiposPermitidos: TIPOS_FILTRO
+        });
+    }
+    
+    const handlerFn = FILTRO_HANDLERS[tipoLower];
+    const combustibles = await handlerFn(valor);
+    
+    res.json(combustibles);
+  } catch (error) {
+    console.error("Error al obtener combustibles filtrados:", error);
+    res.status(500).json({ mensaje: "Error al obtener combustibles", error: error.message });
+  }
+},
+
+legalizarCombustible: async (req, res) => {
     try {
       const { consecutivo } = req.params;
       const { numero_factura } = req.body;
@@ -112,7 +204,9 @@ const httpCombustible = {
       console.error('Error al legalizar combustible:', error);
       res.status(500).json({ mensaje: error.message || 'Error interno del servidor' });
     }
-  }
+}
+
+
 };
 
 

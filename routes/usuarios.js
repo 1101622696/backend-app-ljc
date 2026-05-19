@@ -1,24 +1,17 @@
 import {Router} from 'express'
 import httpUsuarios from '../controllers/usuarios.js'
-// import { check } from 'express-validator'
-// import { validarCampos } from '../middlewares/validar-campos.js'
-// import helpersUsuarios from '../helpers/usuarios.js'
+import multer from 'multer';
 import {validarJWT} from '../middlewares/validar-jwt.js'
 
 const router=Router()
+const upload = multer({ storage: multer.memoryStorage() });
 
 router.get("/",[validarJWT],httpUsuarios.getUsuariosDesdeSheets)
-router.get("/activos",[validarJWT],httpUsuarios.obtenerUsuariosActivos)
-router.get("/inactivos",[validarJWT],httpUsuarios.obtenerUsuariosInactivos)
 router.get("/poremail/:email",[validarJWT],httpUsuarios.obtenerUsuarioporEmail)
-router.get("/ujefe",[validarJWT],httpUsuarios.obtenerUsuariosPerfilJefe)
-router.get("/ucoordinadores",[validarJWT],httpUsuarios.obtenerUsuariosPerfilCoordinador)
-router.get("/upilotos",[validarJWT],httpUsuarios.obtenerUsuariosPerfilPiloto)
-router.get("/uclientes",[validarJWT],httpUsuarios.obtenerUsuariosPerfilCliente)
-
+router.get("/ordenados", [validarJWT], httpUsuarios.obtenerUsuariosOrdenados);
 router.get("/filtrados", [validarJWT], httpUsuarios.obtenerUsuariosFiltrados);
 
-router.post("/crear",[validarJWT],httpUsuarios.crearUsuario)
+router.post("/crear",[validarJWT, upload.array('archivos')],httpUsuarios.crearUsuario)
 router.post("/login",httpUsuarios.login)
 router.post("/registrar-token-fcm", [validarJWT], httpUsuarios.registrarTokenFCM);
 

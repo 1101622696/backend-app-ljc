@@ -66,9 +66,59 @@ const getClienteById = async (codigo) => {
   );
 };
 
+const filtrarClientesPorCampoTexto = (clientes, campo, valor) => {
+  return clientes.filter(cliente => 
+    cliente[campo] && cliente[campo].toLowerCase() === valor.toLowerCase()
+  );
+};
+
+const ordenarClientesPorCampoNumerico = (clientes, campo, orden = 'desc') => {
+  return clientes.sort((a, b) => {
+    const valorA = parseFloat(a[campo]) || 0;
+    const valorB = parseFloat(b[campo]) || 0;
+    
+    return orden.toLowerCase() === 'desc' ? valorB - valorA : valorA - valorB;
+  });
+};
+
 const getClientesPorEstado = async (valor) => {
   const clientes = await getClientes();
-  return filtrarClientesPorCampoTexto(clientes, estado, valor);
+  return filtrarClientesPorCampoTexto(clientes, 'estado', valor);
+};
+
+const getClientesOrdenadosPorViajes = async (orden = 'desc') => {
+  const clientes = await getClientes();
+  return ordenarClientesPorCampoNumerico(clientes, 'viajes', orden);
+};
+
+const getClientesPorTipoPago = async (valor) => {
+  const clientes = await getClientes();
+  return filtrarClientesPorCampoTexto(clientes, 'tipo_pago', valor);
+};
+
+const getClientesPorReteFuente = async (valor) => {
+  const clientes = await getClientes();
+  return filtrarClientesPorCampoTexto(clientes, 'rete_fuente', valor);
+};
+
+const getClientesOrdenadosPorReteIca = async (orden = 'desc') => {
+  const clientes = await getClientes();
+  return ordenarClientesPorCampoNumerico(clientes, 'rete_ica', orden);
+};
+
+const getClientesOrdenadosPorValorEstimado = async (orden = 'desc') => {
+  const clientes = await getClientes();
+  return ordenarClientesPorCampoNumerico(clientes, 'total_valor_viaje_estimado', orden);
+};
+
+const getClientesOrdenadosPorValorReal = async (orden = 'desc') => {
+  const clientes = await getClientes();
+  return ordenarClientesPorCampoNumerico(clientes, 'total_valor_viaje_real', orden);
+};
+
+const getClientesOrdenadosPorGanancia = async (orden = 'desc') => {
+  const clientes = await getClientes();
+  return ordenarClientesPorCampoNumerico(clientes, 'total_ganancia_viaje', orden);
 };
 
 const editarClienteporCodigo = async (codigo, nuevosDatos) => {
@@ -214,7 +264,6 @@ const actualizarEstadoEnSheets = async (codigo, nuevoEstado = "activo") => {
   }
 };
 
-// Función auxiliar para convertir número de columna a letra
 function getColumnLetter(columnNumber) {
   let columnLetter = '';
   while (columnNumber > 0) {
@@ -231,6 +280,13 @@ export const clienteHelper = {
   getClienteByStatus,
   getClienteById,
   getClientesPorEstado,
+  getClientesOrdenadosPorViajes,
+  getClientesPorTipoPago,
+  getClientesPorReteFuente,
+  getClientesOrdenadosPorReteIca,
+  getClientesOrdenadosPorValorEstimado,
+  getClientesOrdenadosPorValorReal,
+  getClientesOrdenadosPorGanancia,
   editarClienteporCodigo,
   actualizarEstadoEnSheets,
   actualizarEconomiaCliente

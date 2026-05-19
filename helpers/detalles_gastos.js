@@ -1,4 +1,4 @@
-import { getSheetsClient } from '../services/google.js';
+import { getDriveClient, getSheetsClient } from '../services/google.js';
 
 const spreadsheetId = process.env.SPREADSHEET_ID;
 
@@ -73,6 +73,50 @@ const getGastosViaje = async (consecutivo_viaje) => {
   return gastos.filter(g => g.consecutivo_viaje === consecutivo_viaje);
 };
 
+const listarArchivosCarpeta = async ({ folderId, fileId }) => {
+  const drive = getDriveClient();
+
+  if (fileId) {
+    const meta = await drive.files.get({
+      fileId,
+      fields: 'id, name, mimeType'
+    });
+
+    return [meta.data];
+  }
+
+  if (folderId) {
+    const response = await drive.files.list({
+      q: `'${folderId}' in parents and trashed = false`,
+      fields: 'files(id, name, mimeType)',
+    });
+
+    return response.data.files;
+  }
+
+  return [];
+};
+
+const obtenerStreamArchivo = async (fileId) => {
+  const drive = getDriveClient();
+
+  const meta = await drive.files.get({
+    fileId,
+    fields: 'name, mimeType'
+  });
+
+  const stream = await drive.files.get(
+    { fileId, alt: 'media' },
+    { responseType: 'stream' }
+  );
+
+  return {
+    nombre: meta.data.name,
+    mimeType: meta.data.mimeType,
+    stream: stream.data
+  };
+};
+
 const actualizarEstadoGastosViaje = async (consecutivo_viaje, nuevoEstado) => {
   const sheets = getSheetsClient();
   
@@ -140,6 +184,8 @@ const calcularTotalGastos = (gastos) => {
 export const detalleGastosViajesHelper = {
   registrarGastosViaje,
   getGastosViaje,
+  listarArchivosCarpeta,
+  obtenerStreamArchivo,
   actualizarEstadoGastosViaje,
   legalizarFacturaIndividual,
   calcularTotalGastos

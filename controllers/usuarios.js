@@ -2,15 +2,22 @@ import { generarJWT } from "../helpers/generar-jwt.js";
 import { usuarioHelper } from '../helpers/usuarios.js';
 import { firebaseHelper } from '../helpers/firebase.js';
 
+const ORDENAMIENTO_HANDLERS = {
+  fecha_vencimiento_licencia: usuarioHelper.getUsuariosOrdenadosPorFechaLicencia,
+  viajes: usuarioHelper.getUsuariosOrdenadosPorViajes,
+};
 
 const FILTRO_HANDLERS = {
   perfil: usuarioHelper.getUsuarioPorPerfil,
   estado: usuarioHelper.getUsuarioPorEstado
 };
+
+const TIPOS_ORDENAMIENTO = Object.keys(ORDENAMIENTO_HANDLERS);
 const TIPOS_FILTRO = Object.keys(FILTRO_HANDLERS);
 
 const httpUsuarios = {
-  getUsuariosDesdeSheets: async (req, res) => {
+
+getUsuariosDesdeSheets: async (req, res) => {
     try {
       const usuarios = await usuarioHelper.getUsuarios();
       res.json({ usuarios });
@@ -18,7 +25,7 @@ const httpUsuarios = {
       console.error('Error leyendo hoja de usuarios', error);
       res.status(500).json({ error: 'Error al leer hoja de cálculo' });
     }
-  },
+},
 
 login: async (req, res) => {
   const { email, password } = req.body;
@@ -37,27 +44,7 @@ login: async (req, res) => {
   }
 },
 
-  obtenerUsuariosActivos: async (req, res) => {
-    try {
-      const data = await usuarioHelper.getUsuarioByStatus('activo');
-      res.json(data);
-    } catch (error) {
-      console.error('Error al obtener datos:', error);
-      res.status(500).json({ mensaje: 'Error al obtener usuarios activos' });
-    }
-  },
-
-  obtenerUsuariosInactivos: async (req, res) => {
-    try {
-      const data = await usuarioHelper.getUsuarioByStatus('inactivo');
-      res.json(data);
-    } catch (error) {
-      console.error('Error al obtener datos:', error);
-      res.status(500).json({ mensaje: 'Error al obtener usuarios activos' });
-    }
-  },
-
-  obtenerUsuarioporEmail: async (req, res) => {
+obtenerUsuarioporEmail: async (req, res) => {
     try {
       const { email } = req.params;
       const usuario = await usuarioHelper.getUsuarioByEmail(email);
@@ -71,54 +58,41 @@ login: async (req, res) => {
       console.error('Error al obtener usuario:', error);
       res.status(500).json({ mensaje: 'Error al obtener usuario' });
     }
-  },
+},
 
-  obtenerUsuariosPerfilJefe: async (req, res) => {
-    try {
-      const data = await usuarioHelper.getUsuarioByPerfil('jefepiloto');
-      res.json(data);
-    } catch (error) {
-      console.error('Error al obtener datos:', error);
-      res.status(500).json({ mensaje: 'Error al obtener usuarios jefe' });
+obtenerUsuariosOrdenados: async (req, res) => {
+  try {
+    const { tipo = "tiempo", orden = "desc" } = req.query;
+    
+    if (orden !== "asc" && orden !== "desc") {
+      return res
+        .status(400)
+        .json({ mensaje: 'El parámetro orden debe ser "asc" o "desc"' });
     }
-  },
-
-  obtenerUsuariosPerfilCoordinador: async (req, res) => {
-    try {
-      const data = await usuarioHelper.getUsuarioByPerfil('coordinador');
-      res.json(data);
-    } catch (error) {
-      console.error('Error al obtener datos:', error);
-      res.status(500).json({ mensaje: 'Error al obtener coordinadores' });
+    
+    const tipoLower = tipo.toLowerCase();
+    if (!TIPOS_ORDENAMIENTO.includes(tipoLower)) {
+      return res
+        .status(400)
+        .json({ 
+          mensaje: `El parámetro tipo debe ser uno de: ${TIPOS_ORDENAMIENTO.join(', ')}`,
+          tiposPermitidos: TIPOS_ORDENAMIENTO
+        });
     }
-  },
+    
+    const handlerFn = ORDENAMIENTO_HANDLERS[tipoLower];
+    const usuarios = await handlerFn(orden);
+    
+    res.json(usuarios);
+  } catch (error) {
+    console.error("Error al obtener usuarios ordenados:", error);
+    res.status(500).json({ mensaje: "Error al obtener usuarios" });
+  }
+},
 
-  obtenerUsuariosPerfilPiloto: async (req, res) => {
-    try {
-      const data = await usuarioHelper.getUsuarioByPerfil('piloto');
-      res.json(data);
-    } catch (error) {
-      console.error('Error al obtener datos:', error);
-      res.status(500).json({ mensaje: 'Error al obtener pilotos' });
-    }
-  },
-
-  obtenerUsuariosPerfilCliente: async (req, res) => {
-    try {
-      const data = await usuarioHelper.getUsuarioByPerfil('cliente');
-      res.json(data);
-    } catch (error) {
-      console.error('Error al obtener datos:', error);
-      res.status(500).json({ mensaje: 'Error al obtener clientes' });
-    }
-  },
-
-    obtenerUsuariosFiltrados: async (req, res) => {
+obtenerUsuariosFiltrados: async (req, res) => {
   try {
     const { tipo, valor } = req.query;
-    
-    // console.log("Parámetros recibidos:", req.query);
-    // console.log(`tipo: "${tipo}", valor: "${valor}"`);
     
     if (!tipo || !valor) {
       return res
@@ -171,7 +145,7 @@ crearUsuario: async (req, res) => {
       }
 },
     
-      editarUsuario: async (req, res) => {
+editarUsuario: async (req, res) => {
         try {
           const { email } = req.params;
           const nuevosDatos = req.body;
@@ -187,9 +161,9 @@ crearUsuario: async (req, res) => {
           console.error('Error al editar Usuario:', error);
           res.status(500).json({ mensaje: 'Error interno del servidor' });
         }
-      },
+},
 
-      editarPasswordUsuario: async (req, res) => {
+editarPasswordUsuario: async (req, res) => {
         try {
           const { email } = req.params;
           const password = req.body;
@@ -205,9 +179,9 @@ crearUsuario: async (req, res) => {
           console.error('Error al editar Usuario:', error);
           res.status(500).json({ mensaje: 'Error interno del servidor' });
         }
-      },
+},
       
-    activarUsuario: async (req, res) => {
+activarUsuario: async (req, res) => {
       try {
         const { email } = req.params;
         const { estado } = req.body; 
@@ -226,9 +200,9 @@ crearUsuario: async (req, res) => {
           error: error.message 
         });
       }
-    },
+},
     
-    desactivarUsuario: async (req, res) => {
+desactivarUsuario: async (req, res) => {
       try {
         const { email } = req.params;
         const { estado } = req.body; 
@@ -247,9 +221,9 @@ crearUsuario: async (req, res) => {
           error: error.message 
         });
       }
-    },
+},
 
-    registrarTokenFCM: async (req, res) => {
+registrarTokenFCM: async (req, res) => {
   try {
     const { token } = req.body;
     const email = req.usuariobdtoken.email;

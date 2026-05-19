@@ -6,54 +6,21 @@ const spreadsheetId = process.env.SPREADSHEET_ID;
 
 const leerUsuariosDesdeSheets = async () => {
   const sheets = getSheetsClient();
+  
   const range = 'Usuarios!A1:AB15'; 
+
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId,
     range,
   });
 
   const rows = res.data.values;
-  if (rows.length === 0) {
-    return [];
-  }
+  if (!rows || rows.length === 0) return [];
 
   const headers = rows[0].map(h => h.trim().toLowerCase());
-  const data = rows.slice(1).map((fila) => {
-    const userData = Object.fromEntries(fila.map((valor, i) => [headers[i], valor]));
-    return {
-      id: userData.id || '',
-      email: userData.email || '',
-      nombre: userData.nombre || '',
-      password: userData.password || '',
-      perfil: userData.perfil || '',
-      estado: userData.estado || '',
-      placa_asignada: userData.placa_asignada || '',
-      tipo_documento: userData.tipo_documento || '',
-      documento: userData.documento || '',
-      ciudad_expedicion: userData.ciudad_expedicion || '',
-      fecha_expedicion: userData.fecha_expedicion || '',
-      pais_nacimiento: userData.pais_nacimiento || '',
-      ciudad_nacimiento: userData.ciudad_nacimiento || '',
-      fecha_nacimiento: userData.fecha_nacimiento || '',
-      grupo_sanguineo_rh: userData.grupo_sanguineo_rh || '',
-      genero: userData.genero || '',
-      estado_civil: userData.estado_civil || '',
-      telefono: userData.telefono || '',
-      tipo_licencia: userData.tipo_licencia || '',
-      num_licencia: userData.num_licencia || '',
-      fecha_expedicion_licencia: userData.fecha_expedicion_licencia || '',
-      fecha_vencimiento: userData.fecha_vencimiento || '',
-      viajes_realizados: userData.viajes_realizados || '',
-      banco: userData.banco || '',
-      num_cuenta: userData.num_cuenta || '',
-      salario_base: userData.salario_base || '',
-      sso: userData.sso || '',
-      codigo: userData.codigo || '',
-      fecha_codigo: userData.fecha_codigo || '',
-    };
-  });  
-
-  return data;
+  return rows.slice(1).map(row =>
+    Object.fromEntries(row.map((val, i) => [headers[i], val]))
+  );
 };
 
 const getUsuarios = () => leerUsuariosDesdeSheets();
@@ -93,43 +60,61 @@ const loginUsuario = async ({ email, password }) => {
         placa_asignada: usuario.placa_asignada || null
       }
     };
-  };
+};
 
-  const getUsuarioByStatus = async (status) => {
+const getUsuarioByStatus = async (status) => {
     const usuarios = await getUsuarios();
     return usuarios.filter(usuario => 
       usuario.estado && usuario.estado.toLowerCase() === status.toLowerCase()
     );
-  };
+};
 
-  const getUsuarioByEmail = async (email) => {
+const getUsuarioByEmail = async (email) => {
     const usuarios = await getUsuarios();
     return usuarios.find(usuario => 
       usuario.email && usuario.email.toLowerCase() === email.toLowerCase()
     );
-  };
+};
   
-  const getUsuarioByPerfil = async (perfile) => {
-    const usuarios = await getUsuarios();
-    return usuarios.filter(usuario => 
-      usuario.perfil && usuario.perfil.toLowerCase() === perfile.toLowerCase()
-    );
-  };
-
-  const filtrarUsuarioPorCampoTexto = (usuarios, campo, valor) => {
-  return usuarios.filter(dron => 
-    dron[campo] && dron[campo].toLowerCase() === valor.toLowerCase()
+const filtrarUsuarioPorCampoTexto = (usuarios, campo, valor) => {
+  return usuarios.filter(usuario => 
+    usuario[campo] && usuario[campo].toLowerCase() === valor.toLowerCase()
   );
+};
+
+const ordenarUsuariosPorCampoNumerico = (usuarios, campo, orden = 'desc') => {
+  return usuarios.sort((a, b) => {
+    const valorA = parseFloat(a[campo]) || 0;
+    const valorB = parseFloat(b[campo]) || 0;
+    
+    return orden.toLowerCase() === 'desc' ? valorB - valorA : valorA - valorB;
+  });
 };
 
 const getUsuarioPorPerfil = async (valor) => {
   const usuarios = await getUsuarios();
-  return filtrarUsuarioPorCampoTexto(usuarios, "perfil", valor);
+  return filtrarUsuarioPorCampoTexto(usuarios, 'perfil', valor);
 };
 
 const getUsuarioPorEstado = async (valor) => {
   const usuarios = await getUsuarios();
-  return filtrarUsuarioPorCampoTexto(usuarios, "estado", valor);
+  return filtrarUsuarioPorCampoTexto(usuarios, 'estado', valor);
+};
+
+const getUsuariosOrdenadosPorViajes = async (orden = 'desc') => {
+  const usuarios = await getUsuarios();
+  return ordenarUsuariosPorCampoNumerico(usuarios, 'viajes', orden);
+};
+
+const getUsuariosOrdenadosPorFechaLicencia = async (orden = 'desc') => {
+  const usuarios = await getUsuarios();
+  
+  return usuarios.sort((a, b) => {
+    const fechaA = new Date(a.fecha_vencimiento_licencia || 0);
+    const fechaB = new Date(b.fecha_vencimiento_licencia || 0);
+    
+    return orden.toLowerCase() === 'desc' ? fechaB - fechaA : fechaA - fechaB;
+  });
 };
 
 const guardarUsuario = async ({ nombre, email, password, perfil, estado,  placa_asignada, tipo_documento, documento, ciudad_expedicion, fecha_expedicion, pais_nacimiento, ciudad_nacimiento, fecha_nacimiento, grupo_sanguineo_rh, genero, estado_civil, telefono, tipo_licencia, num_licencia, fecha_expedicion_licencia, fecha_vencimiento, viajes_realizados, banco, num_cuenta, salario_base, sso, codigo, fechacodigo }) => {
@@ -331,7 +316,6 @@ const actualizarEstadoEnSheets = async (email, nuevoEstado = "activo") => {
     }
 };
   
-  // Función auxiliar para convertir número de columna a letra
 function getColumnLetter(columnNumber) {
     let columnLetter = '';
     while (columnNumber > 0) {
@@ -350,10 +334,64 @@ export const usuarioHelper = {
   editarPasswordUsuario,
   actualizarEstadoEnSheets,
   getUsuarioByStatus,
-  getUsuarioByPerfil,
   getUsuarioByEmail,
   getUsuarioPorPerfil,
   getUsuarioPorEstado,
+  getUsuariosOrdenadosPorViajes,
+  getUsuariosOrdenadosPorFechaLicencia,
   getSheetsClient,
   leerUsuariosDesdeSheets
 };
+
+
+// const leerUsuariosDesdeSheets = async () => {
+//   const sheets = getSheetsClient();
+//   const range = 'Usuarios!A1:AB15'; 
+//   const res = await sheets.spreadsheets.values.get({
+//     spreadsheetId,
+//     range,
+//   });
+
+//   const rows = res.data.values;
+//   if (rows.length === 0) {
+//     return [];
+//   }
+
+//   const headers = rows[0].map(h => h.trim().toLowerCase());
+//   const data = rows.slice(1).map((fila) => {
+//     const userData = Object.fromEntries(fila.map((valor, i) => [headers[i], valor]));
+//     return {
+//       id: userData.id || '',
+//       email: userData.email || '',
+//       nombre: userData.nombre || '',
+//       password: userData.password || '',
+//       perfil: userData.perfil || '',
+//       estado: userData.estado || '',
+//       placa_asignada: userData.placa_asignada || '',
+//       tipo_documento: userData.tipo_documento || '',
+//       documento: userData.documento || '',
+//       ciudad_expedicion: userData.ciudad_expedicion || '',
+//       fecha_expedicion: userData.fecha_expedicion || '',
+//       pais_nacimiento: userData.pais_nacimiento || '',
+//       ciudad_nacimiento: userData.ciudad_nacimiento || '',
+//       fecha_nacimiento: userData.fecha_nacimiento || '',
+//       grupo_sanguineo_rh: userData.grupo_sanguineo_rh || '',
+//       genero: userData.genero || '',
+//       estado_civil: userData.estado_civil || '',
+//       telefono: userData.telefono || '',
+//       tipo_licencia: userData.tipo_licencia || '',
+//       num_licencia: userData.num_licencia || '',
+//       fecha_expedicion_licencia: userData.fecha_expedicion_licencia || '',
+//       fecha_vencimiento: userData.fecha_vencimiento || '',
+//       viajes_realizados: userData.viajes_realizados || '',
+//       banco: userData.banco || '',
+//       num_cuenta: userData.num_cuenta || '',
+//       salario_base: userData.salario_base || '',
+//       sso: userData.sso || '',
+//       codigo: userData.codigo || '',
+//       fecha_codigo: userData.fecha_codigo || '',
+//     };
+//   });  
+
+//   return data;
+// };

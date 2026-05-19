@@ -112,9 +112,9 @@ crearSolicitud: async (req, res) => {
     console.error('Error al guardar solicitud:', error); 
     res.status(500).json({ mensaje: 'Error interno del servidor' }); 
   } 
-  },
+},
 
-  obtenerSolicitudes: async (req, res) => {
+obtenerSolicitudes: async (req, res) => {
     try {
       const data = await solicitudHelper.getSolicitudes();
       res.json(data);
@@ -122,7 +122,7 @@ crearSolicitud: async (req, res) => {
       console.error('Error al obtener datos:', error);
       res.status(500).json({ mensaje: 'Error al obtener solicitudes' });
     }
-  },
+},
 
 obtenerResumenSolicitante: async (req, res) => {
   try {
@@ -169,7 +169,6 @@ obtenerSolicitudPorConsecutivo: async (req, res) => {
     res.status(500).json({ mensaje: 'Error al obtener solicitud' });
   }
 },
-
 
 }
 

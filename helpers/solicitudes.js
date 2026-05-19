@@ -4,11 +4,14 @@ import { getDriveClient, getSheetsClient } from '../services/google.js';
 const spreadsheetId = process.env.SPREADSHEET_ID;
 const carpetaPadreId = process.env.CARPETA_PADRE_ID_SOLICITUDES;
 
-const obtenerDatosSolicitud = async (nombreHoja, rango = 'A1:I1000') => {
+const obtenerDatosSolicitud = async () => {
   const sheets = getSheetsClient();
+  
+  const range = 'Solicitudes!A1:I100'; 
+
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId,
-    range: `${nombreHoja}!${rango}`,
+    range,
   });
 
   const rows = res.data.values;
@@ -20,16 +23,8 @@ const obtenerDatosSolicitud = async (nombreHoja, rango = 'A1:I1000') => {
   );
 };
 
-const getSolicitudes = async () => {
-  const solicitudes = await obtenerDatosSolicitud('Solicitudes');
-  
-  return solicitudes.sort((a, b) => {
-    const numA = parseInt(a.consecutivo.replace(/\D/g, ''), 10);
-    const numB = parseInt(b.consecutivo.replace(/\D/g, ''), 10);
-    
-    return numB - numA;
-  });
-};
+const getSolicitudes = () => obtenerDatosSolicitud();
+
 
 const getSiguienteConsecutivo = async () => {
   const solicitudes = await getSolicitudes();
