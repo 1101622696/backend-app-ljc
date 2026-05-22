@@ -1,6 +1,5 @@
 import express from "express";
 import 'dotenv/config';
-// import dbConexion from "./database/cnxmongoose.js";
 import cors from "cors";
 import usuarios from "./routes/usuarios.js"
 import solicitudes from "./routes/solicitudes.js"
@@ -13,12 +12,18 @@ import prestamos from "./routes/prestamos.js"
 import combustible from "./routes/combustible.js"
 import gastos from "./routes/gastos.js"
 import resumenvehiculo from "./routes/resumen_vehiculo.js"
+import nomina from "./routes/nomina.js"
+import satrack from './routes/satrack.js'
+import alertas from './routes/alertas.js'
+import drive from './routes/drive.js'
 import { firebaseHelper } from "./helpers/firebase.js";
 import health from "./routes/health.js"
+import iniciarCron from './cron.js';
 
 const app = express();
 
 firebaseHelper.initializeFirebaseAdmin();
+iniciarCron();
 
 const whitelist = ['https://localhost','http://localhost:9000', 'http://localhost', 'http://localhost:3000', 'capacitor://localhost', 'ionic://localhost'];
 const corsOptions = {
@@ -48,13 +53,11 @@ app.use("/api/viajes",viajes)
 app.use("/api/combustible",combustible)
 app.use("/api/gastos",gastos)
 app.use("/api/resumenvehiculo",resumenvehiculo)
+app.use("/api/nomina",nomina)
+app.use('/api/satrack', satrack)
+app.use('/api/alertas', alertas)
+app.use('/api/drive', drive)
 app.use("/api/health", health)
-
-// const PORT = process.env.PORT || 4000;
-// app.listen(PORT, () => {
-//     console.log(`Servidor escuchando en el puerto ${PORT}`);
-//     dbConexion();
-// });
 
 const PORT = process.env.PORT || 4000;
 

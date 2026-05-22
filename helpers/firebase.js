@@ -1,10 +1,13 @@
 import admin from 'firebase-admin';
-import { google } from 'googleapis';
+// import { google } from 'googleapis';
+import { getSheetsClient } from '../services/google.js';
 import {usuarioHelper} from '../helpers/usuarios.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
+
+const spreadsheetId = process.env.SPREADSHEET_ID;
 
 const initializeFirebaseAdmin = () => {
   if (admin.apps.length === 0) {
@@ -78,115 +81,55 @@ const initializeFirebaseAdmin = () => {
   return admin;
 };
 
-// Guardar token FCM en Google Sheets
 const guardarTokenFCM = async (email, token) => {
-  try {
-    // Inicializar cliente de Google Sheets
-    const sheets = await usuarioHelper.getSheetsClient();
-    const spreadsheetId = '1fTu_oEvbL5RG0TSL5rIs2YKFtX8BXTymVkXVhBM0_ts';
-    
-    // Verificar si existe una hoja para tokens FCM
-    const sheetInfo = await sheets.spreadsheets.get({
-      spreadsheetId,
-    });
-    
-    const sheetExists = sheetInfo.data.sheets.some(
-      sheet => sheet.properties.title === 'TokensFCM'
-    );
-    
-    // Si no existe la hoja, crearla
-    if (!sheetExists) {
-      await sheets.spreadsheets.batchUpdate({
-        spreadsheetId,
-        resource: {
-          requests: [
-            {
-              addSheet: {
-                properties: {
-                  title: 'TokensFCM',
-                }
-              }
-            }
-          ]
-        }
-      });
-      
-      // Añadir encabezados
-      await sheets.spreadsheets.values.update({
-        spreadsheetId,
-        range: 'TokensFCM!A1:C1',
-        valueInputOption: 'RAW',
-        resource: {
-          values: [['email', 'token', 'fecha_actualizacion']]
-        }
-      });
-    }
-    
-    // Leer tokens actuales
-    const tokensResponse = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: 'TokensFCM!A2:C1000',
-    });
-    
-    const tokenRows = tokensResponse.data.values || [];
-    const existingRowIndex = tokenRows.findIndex(row => row[0] === email);
-    
-    const fechaActual = new Date().toISOString();
-    
-    if (existingRowIndex !== -1) {
-      // Actualizar token existente
-      await sheets.spreadsheets.values.update({
-        spreadsheetId,
-        range: `TokensFCM!A${existingRowIndex + 2}:C${existingRowIndex + 2}`,
-        valueInputOption: 'RAW',
-        resource: {
-          values: [[email, token, fechaActual]]
-        }
-      });
-    } else {
-      // Añadir nuevo token
-      await sheets.spreadsheets.values.append({
-        spreadsheetId,
-        range: 'TokensFCM!A2:C2',
-        valueInputOption: 'RAW',
-        resource: {
-          values: [[email, token, fechaActual]]
-        }
-      });
-    }
-    
-    return true;
-  } catch (error) {
-    console.error('Error al guardar token FCM:', error);
-    return false;
-  }
-};
+  const sheets = getSheetsClient();
 
-// Obtener token FCM por email
-const obtenerTokenFCM = async (email) => {
   try {
-    const sheets = await usuarioHelper.getSheetsClient();
-    const spreadsheetId = '1fTu_oEvbL5RG0TSL5rIs2YKFtX8BXTymVkXVhBM0_ts';
-    
-    // Leer tokens
-    const tokensResponse = await sheets.spreadsheets.values.get({
+    const response = await sheets.spreadsheets.values.get({
       spreadsheetId,
-      range: 'TokensFCM!A2:C1000',
-    });
-    
-    const tokenRows = tokensResponse.data.values || [];
-    const userRow = tokenRows.find(row => row[0] === email);
-    
-    if (userRow) {
-      return userRow[1]; // El token está en la segunda columna
-    }
-    
-    return null;
+      range: 'Usuarios!A2:AD15',
+    })
+
+    const filas = response.data.values || []
+    const filaIndex = filas.findIndex(f => f[1] === email) 
+    if (filaIndex === -1) return false
+
+    const fechaActual = new Date().toISOString()
+    const filaEnHoja = filaIndex + 2
+
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `Usuarios!AC${filaEnHoja}:AD${filaEnHoja}`,
+      valueInputOption: 'RAW',
+      requestBody: { values: [[token, fechaActual]] },
+    })
+
+    return true
   } catch (error) {
-    console.error('Error al obtener token FCM:', error);
-    return null;
+    console.error('Error al guardar token FCM:', error)
+    return false
   }
-};
+}
+
+const obtenerTokenFCM = async (email) => {
+  const sheets = getSheetsClient();
+
+  try {
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: 'Usuarios!A2:AD15',
+    })
+
+    const filas = response.data.values || []
+    const fila = filas.find(f => f[1] === email)
+    if (!fila) return null
+
+    return fila[28] || null 
+  } catch (error) {
+    console.error('Error al obtener token FCM:', error)
+    return null
+  }
+}
 
 // Enviar notificación push
 const enviarNotificacion = async (email, titulo, mensaje, datos = {}) => {

@@ -61,33 +61,49 @@ const getPreoperacionalesByConsecutivo = async (consecutivo) => {
   );
 };
 
-const getResumenPreoperacionalesPorSolicitante = async (email) => {
+const getResumenPreoperacionalesPorPlaca = async (placas) => {
   try {
-    const todoslosPreoperacionales = await getPreoperacionales();
-    const preoperacionalesFiltrados = todoslosPreoperacionales.filter(s => s.correo_usuario  === email);
+    const todoslosPreoperacionales = await getPreoperacionales()
+
+    // convertir a array si llega una sola placa
+    const placasArray = Array.isArray(placas)
+      ? placas
+      : [placas]
+
+    const placasUpper = placasArray.map(p =>
+      p.trim().toUpperCase()
+    )
+
+    const preoperacionalesFiltrados =
+      todoslosPreoperacionales.filter(p =>
+        placasUpper.includes(
+          p.placa?.trim().toUpperCase()
+        )
+      )
 
     const mapConDatos = (lista) => {
+
       return lista.map(r => ({
-        consecutivo: r.consecutivo,
+
+        consecutivo: r.consecutivo || '',
         codigo_viaje: r.codigo_viaje || '',
         odometro: r.odometro || '',
         fecha_creacion: r.fecha_creacion || '',
-        correo_usuario : r.correo_usuario || '',
+        correo_usuario: r.correo_usuario || '',
         usuario: r.usuario || '',
         placa: r.placa || '',
-        link: r.link || '' ,
+        link: r.link || '',
 
-      }));  
-    };
-
+      }))
+    }
     return {
       total: {
         count: preoperacionalesFiltrados.length,
         consecutivos: mapConDatos(preoperacionalesFiltrados)
       }
-    };
+    }
   } catch (error) {
-    console.error('Error al obtener resumen de preoperacionales por email:', error);
+    console.error('Error al obtener resumen de preoperacionales por placa:', error);
     throw error;
   }
 };
@@ -280,7 +296,7 @@ export const preoperacionalHelper = {
   guardarPreoperacional,
   getSiguienteConsecutivo,  
   getPreoperacionalesByConsecutivo,
-  getResumenPreoperacionalesPorSolicitante,
+  getResumenPreoperacionalesPorPlaca,
   editarPreoperacionalPorConsecutivo,
   procesarArchivos,
   subirArchivosACarpetaExistente,

@@ -1,5 +1,6 @@
 import { viajeHelper } from '../helpers/viajes.js';
 import { vehiculoHelper } from '../helpers/vehiculos.js';
+import { usuarioHelper } from '../helpers/usuarios.js';
 import { detalleGastosViajesHelper } from '../helpers/detalles_gastos.js';
 
 const ORDENAMIENTO_HANDLERS = {
@@ -95,88 +96,72 @@ crearViaje: async (req, res) => {
       consecutivo: resultado.consecutivo, 
     });
 
+    const propietario = await usuarioHelper.obtenerPropietarioPorPlaca(placaFinal)
+    if (propietario) {
+      await firebaseHelper.enviarNotificacion(
+        propietario.email,
+        'Solicitud de Anticipo para Nuevo Viaje',
+        `${nombre} ha solicitado un anticipo de ${valor_anticipo_conductor} para iniciar el viaje con destino a: ${destino} para el cliente ${cliente}, consecutivo del viaje: #${resultado.consecutivo}`,
+        { tipo: 'registro_viaje', consecutivo: resultado.consecutivo }
+      )
+    }
+    
   } catch (error) { 
     console.error('Error al crear viaje:', error); 
     res.status(500).json({ mensaje: 'Error interno del servidor' }); 
   } 
 },
 
+// obtenerViajes: async (req, res) => {
+//     try {
+//       const data = await viajeHelper.getViajes();
+//       res.json(data);
+//     } catch (error) {
+//       console.error('Error al obtener datos:', error);
+//       res.status(500).json({ mensaje: 'Error al obtener viajes' });
+//     }
+// },
+
 obtenerViajes: async (req, res) => {
-    try {
-      const data = await viajeHelper.getViajes();
-      res.json(data);
-    } catch (error) {
-      console.error('Error al obtener datos:', error);
-      res.status(500).json({ mensaje: 'Error al obtener viajes' });
-    }
-},
-
-obtenerResumenSolicitante: async (req, res) => {
   try {
-    // const { email } = req.params;
-    const email = req.usuariobdtoken.email;
-    
-    if (!email) {
-      return res.status(400).json({
-        ok: false,
-        mensaje: 'Email es requerido'
-      });
-    }
-
-    const resumen = await viajeHelper.getResumenViajesPorSolicitante(email);
-    
-    res.json({
-      ok: true,
-      resumen,
-      email,
-      mensaje: 'Resumen obtenido exitosamente'
-    });
+    const pagina = parseInt(req.query.pagina) || 1
+    const limite = parseInt(req.query.limite) || 50
+    const data = await viajeHelper.getViajes(pagina, limite)
+    res.json(data)
   } catch (error) {
-    console.error('Error al obtener resumen por email:', error);
-    res.status(500).json({
-      ok: false,
-      mensaje: 'Error interno del servidor',
-      error: error.message
-    });
+    console.error('Error al obtener datos:', error)
+    res.status(500).json({ mensaje: 'Error al obtener viajes' })
   }
 },
 
 obtenerResumenPorPlaca: async (req, res) => {
   try {
-    const { perfil, placa_asignada } = req.usuariobdtoken;
-
-    let placas = [];
-
-    if (perfil === 'administrador') {
-      placas = null; // null = traer todos
-    } else {
-      if (!placa_asignada) {
-        return res.status(400).json({
-          ok: false,
-          mensaje: 'No tienes placas asignadas'
-        });
-      }
-
-      placas = placa_asignada
-        .split(',')
-        .map(p => p.trim().toLowerCase());
+    const { placa } = req.params
+    if (!placa) {
+      return res.status(400).json({
+        ok: false,
+        mensaje: 'Placa requerida'
+      })
     }
 
-    const resumen = await viajeHelper.getResumenViajesPorPlaca(placas);
+    const placas = placa.split(',')
+
+    const resumen = await viajeHelper.getResumenViajesPorPlaca(placas)
 
     res.json({
       ok: true,
       resumen,
-      mensaje: 'Resumen por placa obtenido correctamente'
-    });
+      placas,
+      mensaje: 'Resumen obtenido exitosamente'
+    })
 
   } catch (error) {
-    console.error('Error al obtener viajes por placa:', error);
+    console.error('Error al obtener resumen por placa:', error)
     res.status(500).json({
       ok: false,
       mensaje: 'Error interno del servidor',
       error: error.message
-    });
+    })
   }
 },
 
@@ -211,9 +196,22 @@ cerrarViajeYGastosConductor: async (req, res) => {
       });
     }
     
-    const resultado = await viajeHelper.cerrarViajeYGastosConductor(consecutivo, req.body, archivosOrganizados);
-    if (!resultado) return res.status(404).json({ mensaje: 'Viaje no encontrado' });
-    res.status(200).json({ mensaje: 'Viaje cerrado correctamente', resumen: resultado });
+    const resultado = await viajeHelper.cerrarViajeYGastosConductor(consecutivo, req.body, archivosOrganizados)
+
+    if (!resultado) return res.status(404).json({ mensaje: 'Viaje no encontrado' })
+
+res.status(200).json({ mensaje: 'Viaje cerrado correctamente', resumen: resultado })
+
+const propietario = await usuarioHelper.obtenerPropietarioPorPlaca(resultado.placa)
+if (propietario) {
+  await firebaseHelper.enviarNotificacion(
+    propietario.email,
+    'Viaje listo para aprobar',
+    `El conductor ha cerrado el viaje #${consecutivo}, ingrese para revisarlo y aprobarlo`,
+    { tipo: 'aprobar_viaje', consecutivo }
+  )
+}
+
   } catch (error) {
     console.error('Error al cerrar viaje:', error);
     res.status(500).json({ mensaje: error.message || 'Error interno del servidor' });
@@ -232,32 +230,32 @@ completarSaldoCliente: async (req, res) => {
   }
 },
 
-calcularNomina: async (req, res) => {
-  try {
-    const { email } = req.params;
-    const { mes } = req.query; // ?mes=2026-01
-    const resultado = await viajeHelper.calcularNomina(email, mes);
-    res.status(200).json({ ok: true, resultado });
-  } catch (error) {
-    console.error('Error al calcular nómina:', error);
-    res.status(500).json({ mensaje: 'Error interno del servidor' });
-  }
-},
+// calcularNomina: async (req, res) => {
+//   try {
+//     const { email } = req.params;
+//     const { mes } = req.query; // ?mes=2026-01
+//     const resultado = await viajeHelper.calcularNomina(email, mes);
+//     res.status(200).json({ ok: true, resultado });
+//   } catch (error) {
+//     console.error('Error al calcular nómina:', error);
+//     res.status(500).json({ mensaje: 'Error interno del servidor' });
+//   }
+// },
 
-aprobarNomina: async (req, res) => {
-  try {
-    const { email } = req.params;
-    const { mes } = req.body;
-    const resultado = await viajeHelper.aprobarNomina(email, mes);
-    res.status(200).json({ ok: true, mensaje: 'Nómina aprobada y liquidada', resultado });
-  } catch (error) {
-    console.error('Error al aprobar nómina:', error);
-    res.status(400).json({ 
-    ok: false,
-    mensaje: error.message 
-  });
-  }
-},
+// aprobarNomina: async (req, res) => {
+//   try {
+//     const { email } = req.params;
+//     const { mes } = req.body;
+//     const resultado = await viajeHelper.aprobarNomina(email, mes);
+//     res.status(200).json({ ok: true, mensaje: 'Nómina aprobada y liquidada', resultado });
+//   } catch (error) {
+//     console.error('Error al aprobar nómina:', error);
+//     res.status(400).json({ 
+//     ok: false,
+//     mensaje: error.message 
+//   });
+//   }
+// },
 
 editarViaje: async (req, res) => {
   try {
@@ -277,20 +275,20 @@ editarViaje: async (req, res) => {
   }
 },
 
-pagarSalarioMensual: async (req, res) => {
-  try {
-    const { email } = req.params;
-    const { mes } = req.body; // "2025-01"
-    const resultado = await viajeHelper.pagarSalarioMensual(email, mes);
-    res.status(200).json({ ok: true, mensaje: 'Salario mensual pagado', resultado });
-  } catch (error) {
-    console.error('Error al pagar salario:', error);
-    res.status(400).json({ 
-    ok: false,
-    mensaje: error.message 
-  });
-  }
-},
+// pagarSalarioMensual: async (req, res) => {
+//   try {
+//     const { email } = req.params;
+//     const { mes } = req.body; // "2025-01"
+//     const resultado = await viajeHelper.pagarSalarioMensual(email, mes);
+//     res.status(200).json({ ok: true, mensaje: 'Salario mensual pagado', resultado });
+//   } catch (error) {
+//     console.error('Error al pagar salario:', error);
+//     res.status(400).json({ 
+//     ok: false,
+//     mensaje: error.message 
+//   });
+//   }
+// },
 
 aprobarViajeYGastosPropietario: async (req, res) => {
   try {
@@ -497,6 +495,45 @@ obtenerViajesFiltrados: async (req, res) => {
     res.status(500).json({ mensaje: "Error al obtener viajes", error: error.message });
   }
 },
+
+// obtenerResumenPorPlaca: async (req, res) => {
+//   try {
+//     const { perfil, placa_asignada } = req.usuariobdtoken;
+
+//     let placas = [];
+
+//     if (perfil === 'administrador') {
+//       placas = null; // null = traer todos
+//     } else {
+//       if (!placa_asignada) {
+//         return res.status(400).json({
+//           ok: false,
+//           mensaje: 'No tienes placas asignadas'
+//         });
+//       }
+
+//       placas = placa_asignada
+//         .split(',')
+//         .map(p => p.trim().toLowerCase());
+//     }
+
+//     const resumen = await viajeHelper.getResumenViajesPorPlaca(placas);
+
+//     res.json({
+//       ok: true,
+//       resumen,
+//       mensaje: 'Resumen por placa obtenido correctamente'
+//     });
+
+//   } catch (error) {
+//     console.error('Error al obtener viajes por placa:', error);
+//     res.status(500).json({
+//       ok: false,
+//       mensaje: 'Error interno del servidor',
+//       error: error.message
+//     });
+//   }
+// },
 
 }
 

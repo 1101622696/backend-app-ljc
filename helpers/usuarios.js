@@ -1,5 +1,6 @@
 import { generarJWT } from './generar-jwt.js'; 
 import { getDriveClient, getSheetsClient } from '../services/google.js';
+import { enviarCodigoRecuperacion } from '../helpers/email.js'
 
 const spreadsheetId = process.env.SPREADSHEET_ID;
 // const carpetaPadreId = process.env.CARPETA_PADRE_ID_USUARIOS;
@@ -75,6 +76,43 @@ const getUsuarioByEmail = async (email) => {
       usuario.email && usuario.email.toLowerCase() === email.toLowerCase()
     );
 };
+
+const getUsuariosPorPropietario = async (emailPropietario) => {
+
+  const usuarios = await getUsuarios()
+
+  // buscar propietario
+  const propietario = usuarios.find(
+    u => u.email?.toLowerCase() === emailPropietario.toLowerCase()
+  )
+
+  if (!propietario) return []
+
+  // placas del propietario
+  const placasPropietario = propietario.placa_asignada
+    ? propietario.placa_asignada
+        .split(',')
+        .map(p => p.trim().toUpperCase())
+    : []
+
+  // traer conductores que tengan alguna de esas placas
+  return usuarios.filter(usuario => {
+
+    if (usuario.perfil !== 'conductor') return false
+
+    const placasConductor = usuario.placa_asignada
+      ? usuario.placa_asignada
+          .split(',')
+          .map(p => p.trim().toUpperCase())
+      : []
+
+    return placasConductor.some(p =>
+      placasPropietario.includes(p)
+    )
+
+  })
+
+}
   
 const filtrarUsuarioPorCampoTexto = (usuarios, campo, valor) => {
   return usuarios.filter(usuario => 
@@ -326,6 +364,103 @@ function getColumnLetter(columnNumber) {
     return columnLetter;
 }
 
+// Genera un código de 6 dígitos
+const generarCodigo = () => {
+  return Math.floor(100000 + Math.random() * 900000).toString()
+}
+
+const solicitarRecuperacion = async (email) => {
+  const usuarios = await leerUsuariosDesdeSheets()
+  const usuario = usuarios.find(u => u.email === email)
+
+  if (!usuario) throw new Error('Usuario no encontrado')
+  if (usuario.estado === 'inactivo') throw new Error('Usuario inactivo')
+
+  const codigo = generarCodigo()
+  const fecha_codigo = new Date().toISOString() // guarda fecha y hora exacta
+
+  // Actualizar col AA (codigo) y AB (fecha_codigo) en la hoja
+  const sheets = getSheetsClient()
+  const response = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: 'Usuarios!A2:AB15',
+  })
+
+  const filas = response.data.values || []
+  const filaIndex = filas.findIndex(f => f[1] === email) // col B = email
+  if (filaIndex === -1) throw new Error('Usuario no encontrado en hoja')
+
+  const filaEnHoja = filaIndex + 2
+  await sheets.spreadsheets.values.update({
+    spreadsheetId,
+    range: `Usuarios!AA${filaEnHoja}:AB${filaEnHoja}`,
+    valueInputOption: 'RAW',
+    requestBody: { values: [[codigo, fecha_codigo]] },
+  })
+
+  // Enviar email
+  await enviarCodigoRecuperacion(email, usuario.nombre, codigo)
+
+  return { mensaje: 'Código enviado al correo' }
+}
+
+const verificarCodigo = async (email, codigo) => {
+  const usuarios = await leerUsuariosDesdeSheets()
+  const usuario = usuarios.find(u => u.email === email)
+
+  if (!usuario) throw new Error('Usuario no encontrado')
+  if (!usuario.codigo) throw new Error('No hay código generado')
+
+  // Verificar vencimiento (15 minutos)
+  const fechaCodigo = new Date(usuario.fecha_codigo)
+  const ahora = new Date()
+  const diffMinutos = (ahora - fechaCodigo) / 1000 / 60
+
+  if (diffMinutos > 15) throw new Error('El código ha vencido')
+  if (usuario.codigo !== codigo) throw new Error('Código incorrecto')
+
+  return { mensaje: 'Código válido' }
+}
+
+const cambiarPassword = async (email, codigo, nuevaPassword) => {
+  // Verificar código primero
+  await verificarCodigo(email, codigo)
+
+  const sheets = getSheetsClient()
+  const response = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: 'Usuarios!A2:AB15',
+  })
+
+  const filas = response.data.values || []
+  const filaIndex = filas.findIndex(f => f[1] === email)
+  if (filaIndex === -1) throw new Error('Usuario no encontrado')
+
+  const filaEnHoja = filaIndex + 2
+  const filaActual = filas[filaIndex]
+
+  filaActual[2] = nuevaPassword  
+  filaActual[26] = ''            
+  filaActual[27] = ''            
+
+  await sheets.spreadsheets.values.update({
+    spreadsheetId,
+    range: `Usuarios!A${filaEnHoja}:AB${filaEnHoja}`,
+    valueInputOption: 'RAW',
+    requestBody: { values: [filaActual] },
+  })
+
+  return { mensaje: 'Contraseña actualizada correctamente' }
+}
+
+const obtenerPropietarioPorPlaca = async (placa) => {
+  const usuarios = await leerUsuariosDesdeSheets()
+  return usuarios.find(u => 
+    u.perfil === 'propietario' && 
+    u.placa_asignada?.split(',').map(p => p.trim().toLowerCase()).includes(placa.toLowerCase())
+  ) || null
+}
+
 export const usuarioHelper = {
   getUsuarios,
   loginUsuario,
@@ -335,12 +470,17 @@ export const usuarioHelper = {
   actualizarEstadoEnSheets,
   getUsuarioByStatus,
   getUsuarioByEmail,
+  getUsuariosPorPropietario,
   getUsuarioPorPerfil,
   getUsuarioPorEstado,
   getUsuariosOrdenadosPorViajes,
   getUsuariosOrdenadosPorFechaLicencia,
   getSheetsClient,
-  leerUsuariosDesdeSheets
+  leerUsuariosDesdeSheets,
+  solicitarRecuperacion,
+  verificarCodigo,
+  cambiarPassword,
+  obtenerPropietarioPorPlaca
 };
 
 

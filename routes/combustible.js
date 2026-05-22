@@ -10,9 +10,11 @@ router.get('/', [validarJWT], httpCombustible.listarCombustibles);
 router.get('/obtenerdatoscombustible/:consecutivo',[validarJWT], httpCombustible.obtenerCombustibleporConsecutivo);
 router.get("/ordenados", [validarJWT], httpCombustible.obtenerCombustiblesOrdenados);
 router.get("/filtrados", [validarJWT], httpCombustible.obtenerCombustiblesFiltrados);
+router.get('/resumen-solicitante/placa/:placa', [validarJWT], httpCombustible.obtenerResumenPorPlaca); 
 
 router.post('/crear', [validarJWT, upload.array('archivos')], httpCombustible.registrarCombustible);
 
 router.put('/legalizar/:consecutivo', [validarJWT], httpCombustible.legalizarCombustible);
+router.put("/editar/:consecutivo",[validarJWT, upload.array('archivos')], httpCombustible.editarCombustible)
 
 export default router

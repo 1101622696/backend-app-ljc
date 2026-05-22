@@ -1,5 +1,6 @@
 import stream from 'stream';
 import { getDriveClient, getSheetsClient } from '../services/google.js';
+import { usuarioHelper } from '../helpers/usuarios.js';
 
 const spreadsheetId = process.env.SPREADSHEET_ID;
 const carpetaPadreId = process.env.CARPETA_PADRE_ID_PRESTAMOS;
@@ -27,14 +28,18 @@ const getPrestamos = () => obtenerDatosPrestamo();
 
 const getSiguienteConsecutivo = async () => {
   const prestamos = await getPrestamos();
-  
+
   if (!prestamos.length) return "P-1";
 
-  const ultimo = prestamos[0].consecutivo;
+  const maxNumero = prestamos.reduce((max, prestamo) => {
+    const consecutivo = prestamo.consecutivo || '';
 
-  const numero = parseInt(ultimo.split('-')[1], 10) || 0;
-  
-  return `P-${numero + 1}`;
+    const numero = parseInt(consecutivo.split('-')[1], 10);
+
+    return numero > max ? numero : max;
+  }, 0);
+
+  return `P-${maxNumero + 1}`;
 };
 
 const guardarPrestamo = async ({ valor_pedido, valor_prestado, correo_usuario, usuario, fecha_creacion, estado_prestamo, Link}) => {
@@ -90,6 +95,64 @@ const getResumenPrestamosPorSolicitante = async (email) => {
     throw error;
   }
 };
+
+const getResumenPrestamosPorPropietario = async (placasPropietario) => {
+  try {
+
+    const todosLosPrestamos = await getPrestamos()
+    const todosLosUsuarios = await usuarioHelper.getUsuarios()
+
+    // Convertir placas del propietario a array limpio
+    const placas = placasPropietario
+      .split(',')
+      .map(p => p.trim().toUpperCase())
+
+    // Usuarios que manejan esas placas
+    const conductoresRelacionados = todosLosUsuarios.filter(usuario => {
+
+      if (!usuario.placa_asignada) return false
+
+      const placasUsuario = usuario.placa_asignada
+        .split(',')
+        .map(p => p.trim().toUpperCase())
+
+      return placasUsuario.some(p =>placas.includes(p))
+    })
+
+    // Emails válidos
+    const emailsConductores = conductoresRelacionados.map(u =>(u.email || '').toLowerCase())
+
+    // Filtrar préstamos
+    const prestamosFiltrados = todosLosPrestamos.filter(prestamo =>
+      emailsConductores.includes(
+        (prestamo.correo_usuario || '').toLowerCase()
+      )
+    )
+
+    const mapConDatos = (lista) => {
+      return lista.map(r => ({
+        consecutivo: r.consecutivo,
+        fecha_creacion: r.fecha_creacion || '',
+        correo_usuario: r.correo_usuario || '',
+        usuario: r.usuario || '',
+        link: r.link || '',
+        valor_pedido: r.valor_pedido || '',
+        valor_prestado: r.valor_prestado || '',
+      }))
+    }
+
+    return {
+      total: {
+        count: prestamosFiltrados.length,
+        consecutivos: mapConDatos(prestamosFiltrados)
+      }
+    }
+
+  } catch (error) { 
+    console.error('Error al obtener préstamos del propietario:', error)
+    throw error
+  }
+}
 
 const editarPrestamoporConsecutivo = async (consecutivo, nuevosDatos) => {
   const sheets = getSheetsClient();
@@ -270,6 +333,7 @@ export const prestamoHelper = {
   getSiguienteConsecutivo,  
   getPrestamoByConsecutivo,
   getResumenPrestamosPorSolicitante,
+  getResumenPrestamosPorPropietario,
   editarPrestamoporConsecutivo,
   procesarArchivos,
   subirArchivosACarpetaExistente,

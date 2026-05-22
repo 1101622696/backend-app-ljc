@@ -60,6 +60,19 @@ obtenerUsuarioporEmail: async (req, res) => {
     }
 },
 
+obtenerUsuariosPorPropietario: async (req, res) => {
+  try {
+    const { email } = req.params
+    const usuarios = await usuarioHelper.getUsuariosPorPropietario(email)
+    res.json(usuarios)
+  } catch (error) {
+    console.error('Error al obtener usuarios del propietario:', error)
+    res.status(500).json({
+      mensaje: 'Error al obtener usuarios'
+    })
+  }
+},
+
 obtenerUsuariosOrdenados: async (req, res) => {
   try {
     const { tipo = "tiempo", orden = "desc" } = req.query;
@@ -247,7 +260,37 @@ registrarTokenFCM: async (req, res) => {
     console.error("Error al registrar token FCM:", error);
     res.status(500).json({ msg: "Error interno del servidor" });
   }
-}
+},
+
+solicitarRecuperacion: async (req, res) => {
+  try {
+    const { email } = req.body
+    const resultado = await usuarioHelper.solicitarRecuperacion(email)
+    res.json(resultado)
+  } catch (error) {
+    res.status(400).json({ mensaje: error.message })
+  }
+},
+
+verificarCodigo: async (req, res) => {
+  try {
+    const { email, codigo } = req.body
+    const resultado = await usuarioHelper.verificarCodigo(email, codigo)
+    res.json(resultado)
+  } catch (error) {
+    res.status(400).json({ mensaje: error.message })
+  }
+},
+
+cambiarPassword: async (req, res) => {
+  try {
+    const { email, codigo, nuevaPassword } = req.body
+    const resultado = await usuarioHelper.cambiarPassword(email, codigo, nuevaPassword)
+    res.json(resultado)
+  } catch (error) {
+    res.status(400).json({ mensaje: error.message })
+  }
+},
 
 };
 export default httpUsuarios;

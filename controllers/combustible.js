@@ -1,5 +1,7 @@
 import { combustibleHelper } from '../helpers/combustible.js';
 import { vehiculoHelper } from '../helpers/vehiculos.js';
+import { usuarioHelper } from '../helpers/usuarios.js';
+import { firebaseHelper } from '../helpers/firebase.js';
 
 const ORDENAMIENTO_HANDLERS = {
   galones: combustibleHelper.getCombustiblesOrdenadosPorGalones,
@@ -91,26 +93,52 @@ registrarCombustible: async (req, res) => {
         link_factura
       });
 
+      
+
       res.status(200).json({
         mensaje: resultado.mensaje,
         consecutivo: resultado.consecutivo,
         rendimiento_real: resultado.rendimiento_real,
         alerta: resultado.alerta
       });
+
+const propietario = await usuarioHelper.obtenerPropietarioPorPlaca(placaFinal)
+if (propietario) {
+  await firebaseHelper.enviarNotificacion(
+    propietario.email,
+    'Vehículo tanqueado',
+    `${nombre} ha tanqueado el vehículo ${placaFinal}, #${resultado.consecutivo}`,
+    { tipo: 'registro_combustible', consecutivo: resultado.consecutivo }
+  )
+}
+// si el administrador tanquea una placa que no tiene propietario asignado, simplemente no se envía notificación.
+
     } catch (error) {
       console.error('Error al registrar combustible:', error);
       res.status(500).json({ mensaje: 'Error interno del servidor' });
     }
 },
 
+// listarCombustibles: async (req, res) => {
+//     try {
+//       const data = await combustibleHelper.getCombustibles();
+//       res.json(data);
+//     } catch (error) {
+//       console.error('Error al obtener datos:', error);
+//       res.status(500).json({ mensaje: 'Error al obtener combustibles' });
+//     }
+// },
+
 listarCombustibles: async (req, res) => {
-    try {
-      const data = await combustibleHelper.getCombustibles();
-      res.json(data);
-    } catch (error) {
-      console.error('Error al obtener datos:', error);
-      res.status(500).json({ mensaje: 'Error al obtener combustibles' });
-    }
+  try {
+    const pagina = parseInt(req.query.pagina) || 1
+    const limite = parseInt(req.query.limite) || 50
+    const data = await combustibleHelper.getCombustibles(pagina, limite)
+    res.json(data)
+  } catch (error) {
+    console.error('Error al obtener datos:', error)
+    res.status(500).json({ mensaje: 'Error al obtener combustibles' })
+  }
 },
 
 obtenerCombustibleporConsecutivo: async (req, res) => {
@@ -189,6 +217,37 @@ obtenerCombustiblesFiltrados: async (req, res) => {
   }
 },
 
+obtenerResumenPorPlaca: async (req, res) => {
+  try {
+    const { placa } = req.params
+    if (!placa) {
+      return res.status(400).json({
+        ok: false,
+        mensaje: 'Placa requerida'
+      })
+    }
+
+    const placas = placa.split(',')
+
+    const resumen = await combustibleHelper.getResumenCombustiblesPorPlaca(placas)
+
+    res.json({
+      ok: true,
+      resumen,
+      placas,
+      mensaje: 'Resumen obtenido exitosamente'
+    })
+
+  } catch (error) {
+    console.error('Error al obtener resumen por placa:', error)
+    res.status(500).json({
+      ok: false,
+      mensaje: 'Error interno del servidor',
+      error: error.message
+    })
+  }
+},
+
 legalizarCombustible: async (req, res) => {
     try {
       const { consecutivo } = req.params;
@@ -204,8 +263,56 @@ legalizarCombustible: async (req, res) => {
       console.error('Error al legalizar combustible:', error);
       res.status(500).json({ mensaje: error.message || 'Error interno del servidor' });
     }
-}
+},
 
+editarCombustible: async (req, res) => {
+  try {
+    const { consecutivo } = req.params;
+    const nuevosDatos = req.body;
+
+if (req.files && req.files.length > 0) {
+
+  // obtener combustible actual
+  const combustibleActual =
+    await combustibleHelper.getCombustibleById(consecutivo);
+
+  let linkFactura = combustibleActual?.link_factura || '';
+
+  // si ya existe carpeta, subir ahí
+  if (linkFactura && linkFactura.includes('/folders/')) {
+
+    const carpetaId = combustibleHelper.extraerFolderId(linkFactura);
+
+    linkFactura =
+      await combustibleHelper.subirArchivosACarpetaExistente(
+        req.files,
+        carpetaId
+      );
+
+  } else {
+
+    // si no existe carpeta, crear nueva
+    linkFactura =
+      await combustibleHelper.procesarArchivos(
+        req.files,
+        combustibleActual?.placa || consecutivo
+      );
+  }
+
+  nuevosDatos.link_factura = linkFactura;
+}
+    const resultado = await combustibleHelper.editarCombustibleporConsecutivo(consecutivo, nuevosDatos);
+
+    if (!resultado) {
+      return res.status(404).json({ mensaje: 'Combustbile no encontrado' });
+    }
+
+    res.status(200).json({ mensaje: 'Combustbile actualizado correctamente' });
+  } catch (error) {
+    console.error('Error al editar Combustbile:', error);
+    res.status(500).json({ mensaje: 'Error interno del servidor' });
+  }
+},
 
 };
 

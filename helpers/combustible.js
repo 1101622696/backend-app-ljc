@@ -25,13 +25,99 @@ const obtenerCombustible = async () => {
   );
 };
 
-const getCombustibles = () => obtenerCombustible();
+// const getCombustibles = () => obtenerCombustible();
+
+const getCombustibles = async (pagina = 1, limite = 50) => {
+  const sheets = getSheetsClient();
+  const inicio = (pagina - 1) * limite + 2
+  const fin = inicio + limite - 1
+  const range = `Combustible!A1:Q1`
+  
+  // Primero traer headers
+  const resHeaders = await sheets.spreadsheets.values.get({ spreadsheetId, range })
+  const headers = (resHeaders.data.values?.[0] || []).map(h => h.trim().toLowerCase())
+
+  // Luego traer datos paginados
+  const resData = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: `Combustible!A${inicio}:Q${fin}`,
+  })
+
+  const rows = resData.data.values || []
+  const datos = rows.map(row =>
+    Object.fromEntries(headers.map((h, i) => [h, row[i] ?? '']))
+  )
+
+  return { datos, pagina, limite, hayMas: rows.length === limite }
+}
 
 const getCombustibleById = async (consecutivo) => {
   const combustibles = await getCombustibles();
   return combustibles.find(combustible => 
     combustible.consecutivo === consecutivo
   );
+};
+
+const getTodosLosCombustibles = async () => {
+  const sheets = getSheetsClient()
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: 'Combustible!A1:Q1000',
+  })
+  const rows = res.data.values || []
+  if (rows.length === 0) return []
+  const headers = rows[0].map(h => h.trim().toLowerCase())
+  return rows.slice(1).map(row =>
+    Object.fromEntries(headers.map((h, i) => [h, row[i] ?? '']))
+  )
+}
+
+const getResumenCombustiblesPorPlaca = async (placas) => {
+  try {
+    // const todoslosCombustibles = await getCombustibles()
+const todoslosCombustibles = await getTodosLosCombustibles()
+
+    // convertir a array si llega una sola placa
+    const placasArray = Array.isArray(placas)
+      ? placas
+      : [placas]
+
+    const placasUpper = placasArray.map(p =>
+      p.trim().toUpperCase()
+    )
+
+    const combustiblesFiltrados =
+      todoslosCombustibles.filter(p =>
+        placasUpper.includes(
+          p.placa?.trim().toUpperCase()
+        )
+      )
+
+    const mapConDatos = (lista) => {
+
+      return lista.map(r => ({
+
+        consecutivo: r.consecutivo || '',
+        fecha_registro: r.fecha_registro || '',
+        odometro_actual: r.odometro_actual || '',
+        galones_cargados: r.galones_cargados || '',
+        valor_pagado: r.valor_pagado || '',
+        precio_por_galon: r.precio_por_galon || '',
+        km_recorridos: r.km_recorridos || '',
+        alerta: r.alerta || '',
+
+      }))
+    }
+    return {
+      total: {
+        count: combustiblesFiltrados.length,
+        consecutivos: mapConDatos(combustiblesFiltrados)
+      }
+    }
+  } catch (error) {
+    console.error('Error al obtener resumen de combustibles por placa:', error);
+    throw error;
+  }
 };
 
 const filtrarCombustiblePorCampoTexto = (combustibles, campo, valor) => {
@@ -79,7 +165,6 @@ const getCombustiblesPorEstadoFactura = async (valor) => {
   return filtrarCombustiblePorCampoTexto(combustibles, 'estado_factura', valor);
 };
 
-
 const getCombustiblesPorMes = async (mes) => {
   const combustibles = await getCombustibles();
 
@@ -91,7 +176,6 @@ const getCombustiblesPorMes = async (mes) => {
     return fecha.getMonth() + 1 === Number(mes);
   });
 };
-
 
 const getSiguienteConsecutivo = async () => {
   const registros = await getCombustibles();
@@ -234,6 +318,156 @@ const legalizarCombustible = async (consecutivo, numero_factura) => {
   };
 };
 
+const editarCombustibleporConsecutivo = async (consecutivo, nuevosDatos) => {
+  const sheets = getSheetsClient();
+
+  const response = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: 'Combustible!A2:Q1000',
+  });
+
+  const filas = response.data.values || [];
+
+  const filaIndex = filas.findIndex(
+    fila => fila[0]?.toLowerCase() === consecutivo.toLowerCase()
+  );
+
+  if (filaIndex === -1) {
+    return null;
+  }
+
+  // ===== DATOS ACTUALES =====
+  const filaActual = filas[filaIndex];
+
+  const placa = nuevosDatos.placa || filaActual[2];
+
+  const odometro_actual = parseFloat(
+    nuevosDatos.odometro_actual || filaActual[3]
+  );
+
+  const galones_cargados = parseFloat(
+    nuevosDatos.galones_cargados || filaActual[4]
+  );
+
+  const valor_pagado = parseFloat(
+    nuevosDatos.valor_pagado || filaActual[5]
+  );
+
+  // ===== RECALCULAR =====
+  const precio_por_galon =
+    galones_cargados > 0
+      ? valor_pagado / galones_cargados
+      : 0;
+
+  // Buscar registros anteriores de la misma placa
+  const registrosMismaPlaca = filas.filter(
+    (fila, index) =>
+      index !== filaIndex &&
+      fila[2] === placa
+  );
+
+  let km_recorridos = 0;
+  let rendimiento_real = 0;
+  let alerta = 'no';
+
+  if (registrosMismaPlaca.length > 0) {
+    const ultimoRegistro = registrosMismaPlaca
+      .sort((a, b) => {
+        const odA = parseFloat(a[3]) || 0;
+        const odB = parseFloat(b[3]) || 0;
+        return odB - odA;
+      })[0];
+
+    const odometroAnterior = parseFloat(ultimoRegistro[3]) || 0;
+
+    km_recorridos = odometro_actual - odometroAnterior;
+
+    if (galones_cargados > 0) {
+      rendimiento_real = km_recorridos / galones_cargados;
+    }
+  }
+
+  // ===== RENDIMIENTO ESPERADO =====
+  const vehiculo = await vehiculoHelper.getVehiculoById(placa);
+
+  const rendimiento_esperado =
+    parseFloat(vehiculo?.rendimiento_galon) || 8;
+
+  const diferencia_rendimiento =
+    rendimiento_real - rendimiento_esperado;
+
+  if (
+    rendimiento_real > 0 &&
+    rendimiento_real < (rendimiento_esperado - 1)
+  ) {
+    alerta = 'si';
+  }
+
+  // ===== ARCHIVOS =====
+  let link_factura = filaActual[16] || '';
+
+  if (nuevosDatos.Link) {
+    // Si ya existe carpeta -> subir ahí
+    if (link_factura && link_factura.includes('/folders/')) {
+
+      const match = link_factura.match(/folders\/([a-zA-Z0-9_-]+)/);
+
+      if (match?.[1]) {
+        const carpetaId = match[1];
+
+        link_factura = await subirArchivosACarpetaExistente(
+          nuevosDatos.archivos || [],
+          carpetaId
+        );
+      }
+
+    } else {
+      // Si no existe carpeta -> crear nueva
+      link_factura = await procesarArchivos(
+        nuevosDatos.archivos || [],
+        placa
+      );
+    }
+  }
+
+  // ===== FILA FINAL =====
+  const filaEditada = [
+    filaActual[0], // consecutivo
+    filaActual[1], // fecha registro
+    placa,
+    odometro_actual,
+    galones_cargados,
+    valor_pagado,
+    precio_por_galon,
+    km_recorridos,
+    rendimiento_real,
+    rendimiento_esperado,
+    diferencia_rendimiento,
+    alerta,
+    filaActual[12], // correo
+    filaActual[13], // usuario
+    filaActual[14], // estado factura
+    filaActual[15],
+    link_factura,
+  ];
+
+  const filaEnHoja = filaIndex + 2;
+
+  await sheets.spreadsheets.values.update({
+    spreadsheetId,
+    range: `Combustible!A${filaEnHoja}:Q${filaEnHoja}`,
+    valueInputOption: 'RAW',
+    requestBody: {
+      values: [filaEditada],
+    },
+  });
+
+  return {
+    alerta,
+    rendimiento_real,
+  };
+};
+
 const crearCarpeta = async (nombreCarpeta, parentFolderId) => {
   const drive = getDriveClient();
   
@@ -341,9 +575,15 @@ const subirArchivosACarpetaExistente = async (archivos, carpetaId) => {
   return carpeta.data.webViewLink;
 };
 
+const extraerFolderId = (link) => {
+  const match = link.match(/folders\/([a-zA-Z0-9_-]+)/);
+  return match ? match[1] : null;
+};
+
 export const combustibleHelper = {
   getSiguienteConsecutivo,
   getCombustibleById,
+  getResumenCombustiblesPorPlaca,
   getCombustibles,
   getCombustiblesOrdenadosPorGalones,
   getCombustiblesOrdenadosPorValorPagado,
@@ -354,5 +594,7 @@ export const combustibleHelper = {
   getCombustiblesPorMes,
   registrarCombustible,
   legalizarCombustible,
-  procesarArchivos
+  editarCombustibleporConsecutivo,
+  procesarArchivos,
+  extraerFolderId
 };

@@ -9,7 +9,7 @@ const upload = multer({ storage: multer.memoryStorage() });
 
 router.get("/",[validarJWT],httpPreoperacionales.obtenerPreoperacionales)
 router.get('/obtenerdatospreoperacional/:consecutivo',[validarJWT], httpPreoperacionales.obtenerPreoperacionalPorConsecutivo);
-router.get('/resumen-solicitante/:email', [validarJWT], httpPreoperacionales.obtenerResumenSolicitante); 
+router.get('/resumen-solicitante/placa/:placa', [validarJWT], httpPreoperacionales.obtenerResumenPorPlaca); 
 
 router.post("/crear", [validarJWT, upload.array('archivos')], httpPreoperacionales.crearPreoperacional);
 

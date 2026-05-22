@@ -7,7 +7,7 @@ const carpetaPadreId = process.env.CARPETA_PADRE_ID_VEHICULOS;
 const obtenerDatosVehiculo = async () => {
   const sheets = getSheetsClient();
   
-  const range = 'Vehiculos!A1:AC100'; 
+  const range = 'Vehiculos!A1:AD100'; 
 
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId,
@@ -25,6 +25,48 @@ const obtenerDatosVehiculo = async () => {
 
 const getVehiculos = () => obtenerDatosVehiculo();
 
+const getResumenVehiculosPorPlaca = async (placas) => {
+  try {
+    const todoslosVehiculos = await getVehiculos()
+
+    // convertir a array si llega una sola placa
+    const placasArray = Array.isArray(placas)
+      ? placas
+      : [placas]
+
+    const placasUpper = placasArray.map(p =>
+      p.trim().toUpperCase()
+    )
+
+    const vehiculosFiltrados =
+      todoslosVehiculos.filter(p =>
+        placasUpper.includes(
+          p.placa?.trim().toUpperCase()
+        )
+      )
+
+    const mapConDatos = (lista) => {
+
+      return lista.map(r => ({
+
+        placa: r.placa || '',
+        viajes: r.viajes || '',
+        licencia: r.licencia || '',
+        estado: r.estado || '',
+      }))
+    }
+    return {
+      total: {
+        count: vehiculosFiltrados.length,
+        consecutivos: mapConDatos(vehiculosFiltrados)
+      }
+    }
+  } catch (error) {
+    console.error('Error al obtener resumen de vehiculos por placa:', error);
+    throw error;
+  }
+};
+
 const guardarVehiculo = async ({ placa, viajes, licencia, marca, modelo, referencia, odometro, clase_vehiculo, color, servicio, capacidad, combustible, numero_motor, numero_chasis, fecha_matricula, soat, soat_expedicion, soat_vencimiento, capacidad_ton, tecnico, tecnico_expedicion, tecnico_vencimiento, poliza, poliza_expedicion, poliza_vencimiento, Link, estado, fecha_creacion, rendimiento_galon }) => {
   const sheets = getSheetsClient();
 
@@ -39,13 +81,6 @@ const guardarVehiculo = async ({ placa, viajes, licencia, marca, modelo, referen
   });
 
   return { placa };
-};
-
-const getVehiculoByStatus = async (status) => {
-  const vehiculos = await getVehiculos();
-  return vehiculos.filter(vehiculo => 
-    vehiculo.estado && vehiculo.estado.toLowerCase() === status.toLowerCase()
-  );
 };
 
 const getVehiculoById = async (placa) => {
@@ -391,8 +426,8 @@ const actualizarOdometroVehiculo = async (placa, nuevoOdometro) => {
 
 export const vehiculoHelper = {
   getVehiculos,
+  getResumenVehiculosPorPlaca,
   guardarVehiculo,
-  getVehiculoByStatus,
   getVehiculoById,
   getVehiculosPorEstado,
   getVehiculoOrdenadosPorDistancia,

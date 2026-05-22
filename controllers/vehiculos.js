@@ -149,25 +149,36 @@ obtenerVehiculos: async (req, res) => {
       res.status(500).json({ mensaje: 'Error al obtener Vehiculos' });
     }
 },
-  
-obtenerVehiculosActivos: async (req, res) => {
-    try {
-      const data = await vehiculoHelper.getVehiculoByStatus('activo');
-      res.json(data);
-    } catch (error) {
-      console.error('Error al obtener datos:', error);
-      res.status(500).json({ mensaje: 'Error al obtener vehiculos activos' });
-    }
-},
 
-obtenerVehiculosInactivos: async (req, res) => {
-    try {
-      const data = await vehiculoHelper.getVehiculoByStatus('inactivo');
-      res.json(data);
-    } catch (error) {
-      console.error('Error al obtener datos:', error);
-      res.status(500).json({ mensaje: 'Error al obtener Vehiculos inactivos' });
+obtenerResumenPorPlaca: async (req, res) => {
+  try {
+    const { placa } = req.params
+    if (!placa) {
+      return res.status(400).json({
+        ok: false,
+        mensaje: 'Placa requerida'
+      })
     }
+
+    const placas = placa.split(',')
+
+    const resumen = await vehiculoHelper.getResumenVehiculosPorPlaca(placas)
+
+    res.json({
+      ok: true,
+      resumen,
+      placas,
+      mensaje: 'Resumen obtenido exitosamente'
+    })
+
+  } catch (error) {
+    console.error('Error al obtener resumen por placa:', error)
+    res.status(500).json({
+      ok: false,
+      mensaje: 'Error interno del servidor',
+      error: error.message
+    })
+  }
 },
 
 obtenerVehiculosOrdenados: async (req, res) => {

@@ -1,5 +1,6 @@
 import { solicitudHelper } from '../helpers/solicitudes.js';
 import { vehiculoHelper } from '../helpers/vehiculos.js';
+import { usuarioHelper } from '../helpers/usuarios.js';
 
 const httpSolicitudes = {
 
@@ -108,6 +109,16 @@ crearSolicitud: async (req, res) => {
       });
     }
   
+    const propietario = await usuarioHelper.obtenerPropietarioPorPlaca(placaFinal)
+    if (propietario) {
+      await firebaseHelper.enviarNotificacion(
+        propietario.email,
+        'Solicitud de Mantenimiento',
+        `${nombre} ha solicitado un mantenimiento para la placa ${placaFinal} consecutivo de la solicitud: #${resultado.consecutivo}`,
+        { tipo: 'solicitud_mantenimiento', consecutivo: resultado.consecutivo }
+      )
+    }
+
   } catch (error) { 
     console.error('Error al guardar solicitud:', error); 
     res.status(500).json({ mensaje: 'Error interno del servidor' }); 
@@ -124,33 +135,34 @@ obtenerSolicitudes: async (req, res) => {
     }
 },
 
-obtenerResumenSolicitante: async (req, res) => {
+obtenerResumenPorPlaca: async (req, res) => {
   try {
-    // const { email } = req.params;
-    const email = req.usuariobdtoken.email;
-    
-    if (!email) {
+    const { placa } = req.params
+    if (!placa) {
       return res.status(400).json({
         ok: false,
-        mensaje: 'Email es requerido'
-      });
+        mensaje: 'Placa requerida'
+      })
     }
 
-    const resumen = await solicitudHelper.getResumenSolicitudesPorSolicitante(email);
-    
+    const placas = placa.split(',')
+
+    const resumen = await solicitudHelper.getResumenSolicitudesPorPlaca(placas)
+
     res.json({
       ok: true,
       resumen,
-      email,
+      placas,
       mensaje: 'Resumen obtenido exitosamente'
-    });
+    })
+
   } catch (error) {
-    console.error('Error al obtener resumen por email:', error);
+    console.error('Error al obtener resumen por placa:', error)
     res.status(500).json({
       ok: false,
       mensaje: 'Error interno del servidor',
       error: error.message
-    });
+    })
   }
 },
 

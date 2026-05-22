@@ -101,6 +101,33 @@ obtenerResumenSolicitante: async (req, res) => {
   }
 },
 
+obtenerResumenPropietario: async (req, res) => {
+  try {
+    const placasPropietario = req.usuariobdtoken.placa_asignada
+    
+    if (!placasPropietario) {
+      return res.status(400).json({
+        ok: false,
+        mensaje: 'El propietario no tiene placas asignadas'
+      })
+    }
+
+    const resumen = await prestamoHelper.getResumenPrestamosPorPropietario(placasPropietario)
+    res.json({
+      ok: true,
+      resumen,
+      mensaje: 'Resumen obtenido exitosamente'
+    })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({
+      ok: false,
+      mensaje: 'Error interno del servidor',
+      error: error.message
+    })
+  }
+},
+
 obtenerPrestamoPorConsecutivo: async (req, res) => {
   try {
     const { consecutivo } = req.params;

@@ -25,6 +25,50 @@ const obtenerDatosMantenimiento = async () => {
 
 const getMantenimientos = () => obtenerDatosMantenimiento();
 
+const getResumenMantenimientosPorPlaca = async (placas) => {
+  try {
+    const todoslosMantenimientos = await getMantenimientos()
+
+    // convertir a array si llega una sola placa
+    const placasArray = Array.isArray(placas)
+      ? placas
+      : [placas]
+
+    const placasUpper = placasArray.map(p =>
+      p.trim().toUpperCase()
+    )
+
+    const mantenimientosFiltrados =
+      todoslosMantenimientos.filter(p =>
+        placasUpper.includes(
+          p.placa?.trim().toUpperCase()
+        )
+      )
+
+    const mapConDatos = (lista) => {
+
+      return lista.map(r => ({
+
+        consecutivo: r.consecutivo || '',
+        placa: r.placa || '',
+        tipo_mantenimiento: r.tipo_mantenimiento || '',
+        valor_mantenimiento: r.valor_mantenimiento || '',
+        odometro: r.odometro || '',
+        fecha_creacion: r.fecha_creacion || '',
+      }))
+    }
+    return {
+      total: {
+        count: mantenimientosFiltrados.length,
+        consecutivos: mapConDatos(mantenimientosFiltrados)
+      }
+    }
+  } catch (error) {
+    console.error('Error al obtener resumen de mantenimientos por placa:', error);
+    throw error;
+  }
+};
+
 const getSiguienteConsecutivo = async () => {
   const mantenimientos = await getMantenimientos();
   
@@ -100,37 +144,6 @@ const getMantenimientosPorPlaca = async (valor) => {
 const getMantenimientosOrdenadosPorValor = async (orden = 'desc') => {
   const mantenimientos = await getMantenimientos();
   return ordenarMantenimientosPorCampoNumerico(mantenimientos, 'valor_mantenimiento', orden);
-};
-
-const getResumenMantenimientosPorSolicitante = async (email) => {
-  try {
-    const todoslosMantenimientos = await getMantenimientos();
-    const mantenimientosFiltrados = todoslosMantenimientos.filter(m => m.correo_usuario  === email);
-
-    const mapConDatos = (lista) => {
-      return lista.map(r => ({
-        consecutivo: r.consecutivo,
-        odometro: r.odometro || '',
-        fecha_creacion: r.fecha_creacion || '',
-        correo_usuario : r.correo_usuario || '',
-        usuario: r.usuario || '',
-        descripcion: r.descripcion || '',
-        placa: r.placa || '',
-        link: r.link || '' ,
-
-      }));  
-    };
-
-    return {
-      total: {
-        count: mantenimientosFiltrados.length,
-        consecutivos: mapConDatos(mantenimientosFiltrados)
-      }
-    };
-  } catch (error) {
-    console.error('Error al obtener resumen de mantenimientos por email:', error);
-    throw error;
-  }
 };
 
 const editarMantenimientoporConsecutivo = async (consecutivo, nuevosDatos) => {
@@ -282,6 +295,7 @@ const buscarCarpetaPorNombre = async (nombreCarpeta, parentFolderId) => {
 
 export const mantenimientoHelper = {
   getMantenimientos,
+  getResumenMantenimientosPorPlaca,
   guardarMantenimiento,
   getSiguienteConsecutivo,  
   getMantenimientosByConsecutivo,
@@ -289,7 +303,6 @@ export const mantenimientoHelper = {
   getMantenimientosPorTipo,
   getMantenimientosOrdenadosPorFechaRegistro,
   getMantenimientosPorPlaca,
-  getResumenMantenimientosPorSolicitante,
   editarMantenimientoporConsecutivo,
   procesarArchivos,
   subirArchivosACarpetaExistente

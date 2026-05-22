@@ -9,8 +9,7 @@ const upload = multer({ storage: multer.memoryStorage() });
 
 router.get("/",[validarJWT],httpSolicitudes.obtenerSolicitudes)
 router.get('/obtenerdatossolicitud/:consecutivo',[validarJWT], httpSolicitudes.obtenerSolicitudPorConsecutivo);
-
-router.get('/resumen-solicitante', [validarJWT], httpSolicitudes.obtenerResumenSolicitante); 
+router.get('/resumen-solicitante/placa/:placa', [validarJWT], httpSolicitudes.obtenerResumenPorPlaca); 
 
 router.post("/crear", [validarJWT, upload.array('archivos')], httpSolicitudes.crearSolicitud);
 

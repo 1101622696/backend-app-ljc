@@ -44,6 +44,37 @@ listarGastos: async (req, res) => {
     }
 },
 
+obtenerResumenPorPlaca: async (req, res) => {
+  try {
+    const { placa } = req.params
+    if (!placa) {
+      return res.status(400).json({
+        ok: false,
+        mensaje: 'Placa requerida'
+      })
+    }
+
+    const placas = placa.split(',')
+
+    const resumen = await gastosVehiculoHelper.getResumenGastosPorPlaca(placas)
+
+    res.json({
+      ok: true,
+      resumen,
+      placas,
+      mensaje: 'Resumen obtenido exitosamente'
+    })
+
+  } catch (error) {
+    console.error('Error al obtener resumen por placa:', error)
+    res.status(500).json({
+      ok: false,
+      mensaje: 'Error interno del servidor',
+      error: error.message
+    })
+  }
+},
+
 obtenerGastoporConsecutivo: async (req, res) => {
       try {
         const { consecutivo } = req.params;
@@ -87,6 +118,24 @@ obtenerGastosOrdenados: async (req, res) => {
   } catch (error) {
     console.error("Error al obtener gastos ordenados:", error);
     res.status(500).json({ mensaje: "Error al obtener gastos" });
+  }
+},
+
+editarGasto: async (req, res) => {
+  try {
+    const { consecutivo } = req.params;
+    const nuevosDatos = req.body;
+
+    const resultado = await gastosVehiculoHelper.editarGastoporConsecutivo(consecutivo, nuevosDatos);
+
+    if (!resultado) {
+      return res.status(404).json({ mensaje: 'Gasto no encontrado' });
+    }
+
+    res.status(200).json({ mensaje: 'Gasto actualizado correctamente' });
+  } catch (error) {
+    console.error('Error al editar Gasto:', error);
+    res.status(500).json({ mensaje: 'Error interno del servidor' });
   }
 },
 

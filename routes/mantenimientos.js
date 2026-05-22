@@ -10,7 +10,7 @@ const upload = multer({ storage: multer.memoryStorage() });
 
 router.get("/",[validarJWT],httpMantenimientos.obtenerMantenimientos)
 router.get('/obtenerdatosmantenimiento/:consecutivo',[validarJWT], httpMantenimientos.obtenerMantenimientoPorConsecutivo);
-router.get('/resumen-solicitante', [validarJWT], httpMantenimientos.obtenerResumenSolicitante); 
+router.get('/resumen-solicitante/placa/:placa', [validarJWT], httpMantenimientos.obtenerResumenPorPlaca); 
 router.get("/ordenados", [validarJWT], httpMantenimientos.obtenerMantenimientosOrdenados);
 router.get("/filtrados", [validarJWT], httpMantenimientos.obtenerMantenimientosFiltrados);
 

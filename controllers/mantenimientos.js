@@ -139,33 +139,34 @@ obtenerMantenimientos: async (req, res) => {
     }
 },
 
-obtenerResumenSolicitante: async (req, res) => {
+obtenerResumenPorPlaca: async (req, res) => {
   try {
-    // const { email } = req.params;
-    const email = req.usuariobdtoken.email;
-    
-    if (!email) {
+    const { placa } = req.params
+    if (!placa) {
       return res.status(400).json({
         ok: false,
-        mensaje: 'Email es requerido'
-      });
+        mensaje: 'Placa requerida'
+      })
     }
 
-    const resumen = await mantenimientoHelper.getResumenMantenimientosPorSolicitante(email);
-    
+    const placas = placa.split(',')
+
+    const resumen = await mantenimientoHelper.getResumenMantenimientosPorPlaca(placas)
+
     res.json({
       ok: true,
       resumen,
-      email,
+      placas,
       mensaje: 'Resumen obtenido exitosamente'
-    });
+    })
+
   } catch (error) {
-    console.error('Error al obtener resumen por email:', error);
+    console.error('Error al obtener resumen por placa:', error)
     res.status(500).json({
       ok: false,
       mensaje: 'Error interno del servidor',
       error: error.message
-    });
+    })
   }
 },
 

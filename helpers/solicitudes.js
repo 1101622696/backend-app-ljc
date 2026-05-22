@@ -25,7 +25,6 @@ const obtenerDatosSolicitud = async () => {
 
 const getSolicitudes = () => obtenerDatosSolicitud();
 
-
 const getSiguienteConsecutivo = async () => {
   const solicitudes = await getSolicitudes();
   
@@ -62,13 +61,30 @@ const getSolicitudesByConsecutivo = async (consecutivo) => {
   );
 };
 
-const getResumenSolicitudesPorSolicitante = async (email) => {
+const getResumenSolicitudesPorPlaca = async (placas) => {
   try {
-    const todoslosSolicitudes = await getSolicitudes();
-    const solicitudesFiltradas = todoslosSolicitudes.filter(s => s.correo_usuario  === email);
+    const todoslosSolicitudes = await getSolicitudes()
+
+    // convertir a array si llega una sola placa
+    const placasArray = Array.isArray(placas)
+      ? placas
+      : [placas]
+
+    const placasUpper = placasArray.map(p =>
+      p.trim().toUpperCase()
+    )
+
+    const solicitudesFiltradas =
+      todoslosSolicitudes.filter(p =>
+        placasUpper.includes(
+          p.placa?.trim().toUpperCase()
+        )
+      )
 
     const mapConDatos = (lista) => {
+
       return lista.map(r => ({
+
         consecutivo: r.consecutivo,
         odometro: r.odometro || '',
         fecha_creacion: r.fecha_creacion || '',
@@ -78,17 +94,16 @@ const getResumenSolicitudesPorSolicitante = async (email) => {
         placa: r.placa || '',
         link: r.link || '' ,
 
-      }));  
-    };
-
+      }))
+    }
     return {
       total: {
         count: solicitudesFiltradas.length,
         consecutivos: mapConDatos(solicitudesFiltradas)
       }
-    };
+    }
   } catch (error) {
-    console.error('Error al obtener resumen de solicitudes por email:', error);
+    console.error('Error al obtener resumen de solicitudes Filtradas por placa:', error);
     throw error;
   }
 };
@@ -155,12 +170,11 @@ const procesarArchivos = async (archivos, consecutivo) => {
   return carpeta.webViewLink;
 };
 
-
 export const solicitudHelper = {
   getSolicitudes,
   guardarSolicitud,
   getSiguienteConsecutivo,  
   getSolicitudesByConsecutivo,
-  getResumenSolicitudesPorSolicitante,
+  getResumenSolicitudesPorPlaca,
   procesarArchivos,
 };

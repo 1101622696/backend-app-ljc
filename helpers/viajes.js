@@ -1,8 +1,8 @@
 import stream from 'stream';
 import { getDriveClient, getSheetsClient } from '../services/google.js';
-import { usuarioHelper } from '../helpers/usuarios.js';
+// import { usuarioHelper } from '../helpers/usuarios.js';
 import { clienteHelper } from '../helpers/clientes.js';
-import { prestamoHelper } from '../helpers/prestamos.js';
+// import { prestamoHelper } from '../helpers/prestamos.js';
 import { gastosVehiculoHelper } from '../helpers/gastos.js';
 import { detalleGastosViajesHelper } from '../helpers/detalles_gastos.js';
 import { get } from 'http';
@@ -26,15 +26,103 @@ const obtenerDatosViaje = async (nombreHoja, rango = 'A1:AN1000') => {
   );
 };
 
-const getViajes = async () => {
-  const viajes = await obtenerDatosViaje('Viajes');
+// const getViajes = async () => {
+//   const viajes = await obtenerDatosViaje('Viajes');
   
-  return viajes.sort((a, b) => {
-    const numA = parseInt(a.consecutivo.replace(/\D/g, ''), 10);
-    const numB = parseInt(b.consecutivo.replace(/\D/g, ''), 10);
+//   return viajes.sort((a, b) => {
+//     const numA = parseInt(a.consecutivo.replace(/\D/g, ''), 10);
+//     const numB = parseInt(b.consecutivo.replace(/\D/g, ''), 10);
     
-    return numB - numA;
-  });
+//     return numB - numA;
+//   });
+// };
+
+const getViajes = async (pagina = 1, limite = 50) => {
+  const sheets = getSheetsClient()
+  const inicio = (pagina - 1) * limite + 2
+  const fin = inicio + limite - 1
+
+  const resHeaders = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: 'Viajes!A1:AN1',
+  })
+  const headers = (resHeaders.data.values?.[0] || []).map(h => h.trim().toLowerCase())
+
+  const resData = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: `Viajes!A${inicio}:AN${fin}`,
+  })
+
+  const rows = resData.data.values || []
+  const datos = rows
+    .map(row => Object.fromEntries(headers.map((h, i) => [h, row[i] ?? ''])))
+    .sort((a, b) => {
+      const numA = parseInt(a.consecutivo?.replace(/\D/g, ''), 10) || 0
+      const numB = parseInt(b.consecutivo?.replace(/\D/g, ''), 10) || 0
+      return numB - numA
+    })
+
+  return { datos, pagina, limite, hayMas: rows.length === limite }
+}
+
+const getTodosLosViajes = async () => {
+  const sheets = getSheetsClient()
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: 'Viajes!A1:AN1000',
+  })
+  const rows = res.data.values || []
+  if (rows.length === 0) return []
+  const headers = rows[0].map(h => h.trim().toLowerCase())
+  return rows.slice(1).map(row =>
+    Object.fromEntries(headers.map((h, i) => [h, row[i] ?? '']))
+  )
+}
+
+const getResumenViajesPorPlaca = async (placas) => {
+  try {
+    // const todoslosViajes = await getViajes()
+const todoslosViajes = await getTodosLosViajes()
+
+    // convertir a array si llega una sola placa
+    const placasArray = Array.isArray(placas)
+      ? placas
+      : [placas]
+
+    const placasUpper = placasArray.map(p =>
+      p.trim().toUpperCase()
+    )
+
+    const viajesFiltrados =
+      todoslosViajes.filter(p =>
+        placasUpper.includes(
+          p.placa?.trim().toUpperCase()
+        )
+      )
+
+    const mapConDatos = (lista) => {
+
+      return lista.map(r => ({
+
+        consecutivo: r.consecutivo || '',
+        placa: r.placa || '',
+        cliente: r.cliente || '',
+        destino: r.destino || '',
+        fecha_inicio: r.fecha_inicio || '',
+        estado_viaje: r.estado_viaje || '',
+
+      }))
+    }
+    return {
+      total: {
+        count: viajesFiltrados.length,
+        consecutivos: mapConDatos(viajesFiltrados)
+      }
+    }
+  } catch (error) {
+    console.error('Error al obtener resumen de viajes por placa:', error);
+    throw error;
+  }
 };
 
 const getViajesByConsecutivo = async (consecutivo) => {
@@ -50,9 +138,20 @@ const filtrarViajesPorCampoTexto = (viajes, campo, valor) => {
   );
 };
 
+// const filtrarNominasPorCampoTexto = (nominas, campo, valor) => {
+//   return nominas.filter(nomina => 
+//     nomina[campo] && nomina[campo].toLowerCase() === valor.toLowerCase()
+//   );
+// };
+
 const getViajesPorEstadoSaldoCliente = async (valor) => {
   const viajes = await getViajes();
   return filtrarViajesPorCampoTexto(viajes, 'estado_saldo_cliente', valor);
+};
+
+const getNominasPorTipo = async (valor) => {
+  const nominas = await getNominaConductores();
+  return filtrarNominasPorCampoTexto(nominas, 'tipo', valor);
 };
 
 const getViajesPorEstadoViaje = async (valor) => {
@@ -69,6 +168,25 @@ const ordenarViajesPorCampoNumerico = (viajes, campo, orden = 'desc') => {
   });
 };
 
+// const ordenarNominasPorCampoNumerico = (nominas, campo, orden = 'desc') => {
+//   return nominas.sort((a, b) => {
+//     const valorA = parseFloat(a[campo]) || 0;
+//     const valorB = parseFloat(b[campo]) || 0;
+    
+//     return orden.toLowerCase() === 'desc' ? valorB - valorA : valorA - valorB;
+//   });
+// };
+
+// const getNominasOrdenadosPorValor = async (orden = 'desc') => {
+//   const nominas = await getNominaConductores();
+//   return ordenarNominasPorCampoNumerico(nominas, 'total_nomina', orden);
+// };
+
+// const getNominasOrdenadosPorViajes = async (orden = 'desc') => {
+//   const nominas = await getNominaConductores();
+//   return ordenarNominasPorCampoNumerico(nominas, 'total_viajes_mes', orden);
+// };
+
 const getViajesOrdenadosPorFechaInicio = async (orden = 'desc') => {
   const viajes = await getViajes();
   
@@ -79,6 +197,17 @@ const getViajesOrdenadosPorFechaInicio = async (orden = 'desc') => {
     return orden.toLowerCase() === 'desc' ? fechaB - fechaA : fechaA - fechaB;
   });
 };
+
+// const getNominasOrdenadosPorFechaPago = async (orden = 'desc') => {
+//   const nominas = await getNominaConductores();
+  
+//   return nominas.sort((a, b) => {
+//     const fechaA = new Date(a.fecha_pago || 0);
+//     const fechaB = new Date(b.fecha_pago || 0);
+    
+//     return orden.toLowerCase() === 'desc' ? fechaB - fechaA : fechaA - fechaB;
+//   });
+// };
 
 const getViajesOrdenadosPorFechaFin = async (orden = 'desc') => {
   const viajes = await getViajes();
@@ -163,49 +292,6 @@ const getResumenViajesPorSolicitante = async (email) => {
     };
   } catch (error) {
     console.error('Error al obtener resumen de preoperacionales por email:', error);
-    throw error;
-  }
-};
-
-const getResumenViajesPorPlaca = async (placas) => {
-  try {
-    const todoslosViajes = await getViajes();
-
-    let viajesFiltrados;
-
-    if (!placas) {
-      // administrador → todos
-      viajesFiltrados = todoslosViajes;
-    } else {
-      viajesFiltrados = todoslosViajes.filter(v =>
-        v.placa && placas.includes(v.placa.toLowerCase())
-      );
-    }
-
-    const mapConDatos = (lista) => {
-      return lista.map(r => ({
-        consecutivo: r.consecutivo,
-        fecha_creacion: r.fecha_creacion || '',
-        correo_usuario: r.correo_usuario || '',
-        usuario: r.usuario || '',
-        placa: r.placa || '',
-        cliente: r.cliente || '',
-        destino: r.destino || '',
-        fecha_inicio: r.fecha_inicio || '',
-        estado_viaje: r.estado_viaje || '',
-        estado_preoperacional: r.estado_preoperacional || '',
-      }));
-    };
-
-    return {
-      total: {
-        count: viajesFiltrados.length,
-        viajes: mapConDatos(viajesFiltrados)
-      }
-    };
-
-  } catch (error) {
-    console.error('Error en getResumenViajesPorPlaca:', error);
     throw error;
   }
 };
@@ -386,7 +472,8 @@ const cerrarViajeYGastosConductor = async (consecutivo, datos, archivos) => {
     total_gastos_conductor, 
     saldo_anticipo_conductor,
     saldo_pendiente_conductor,
-    diez_pcto
+    diez_pcto,
+    placa: filaActual[1]
   };
 };
 
@@ -558,206 +645,212 @@ const completarSaldoCliente = async (consecutivo) => {
   return true;
 };
 
-const calcularNomina = async (emailConductor, mes) => {
-  const viajes = await getViajes();
+// const calcularNomina = async (emailConductor, mes) => {
+//   const viajes = await getViajes();
 
-  const viajesConductor = viajes.filter(v =>
-    v.correo_usuario === emailConductor &&
-    (v.estado_viaje === 'aprobado' || v.estado_viaje === 'facturado') && 
-    v.liquidado === 'no'
-  );
+//   const viajesConductor = viajes.filter(v =>
+//     v.correo_usuario === emailConductor &&
+//     (v.estado_viaje === 'aprobado' || v.estado_viaje === 'facturado') && 
+//     v.liquidado === 'no'
+//   );
 
-  if (!viajesConductor.length) {
-    return { mensaje: 'No hay viajes pendientes de liquidar', total_nomina: 0 };
-  }
+//   if (!viajesConductor.length) {
+//     return { mensaje: 'No hay viajes pendientes de liquidar', total_nomina: 0 };
+//   }
 
-  const total_viajes_mes = viajesConductor.length;
-  const diez_pcto_total_mes = viajesConductor.reduce((acc, v) => acc + (parseFloat(v.diez_pcto) || 0), 0);
-  const saldo_anticipo_total_mes = viajesConductor.reduce((acc, v) => acc + (parseFloat(v.saldo_anticipo_conductor) || 0), 0);
+//   const total_viajes_mes = viajesConductor.length;
+//   const diez_pcto_total_mes = viajesConductor.reduce((acc, v) => acc + (parseFloat(v.diez_pcto) || 0), 0);
+//   const saldo_anticipo_total_mes = viajesConductor.reduce((acc, v) => acc + (parseFloat(v.saldo_anticipo_conductor) || 0), 0);
 
-  // Buscar préstamos pendientes
-  const prestamos = await prestamoHelper.getPrestamos();
-  const prestamosPendientes = prestamos.filter(p =>
-    p.correo_usuario === emailConductor &&
-    p.estado_prestamo === 'pendiente'
-  );
+//   // Buscar préstamos pendientes
+//   const prestamos = await prestamoHelper.getPrestamos();
+//   const prestamosPendientes = prestamos.filter(p =>
+//     p.correo_usuario === emailConductor &&
+//     p.estado_prestamo === 'pendiente'
+//   );
 
-  const total_prestamos_pendientes = prestamosPendientes.reduce((acc, p) => acc + (parseFloat(p.valor_prestado) || 0), 0);
+//   const total_prestamos_pendientes = prestamosPendientes.reduce((acc, p) => acc + (parseFloat(p.valor_prestado) || 0), 0);
 
-  const usuarios = await usuarioHelper.leerUsuariosDesdeSheets();
-  const conductor = usuarios.find(u => u.email === emailConductor);
+//   const usuarios = await usuarioHelper.leerUsuariosDesdeSheets();
+//   const conductor = usuarios.find(u => u.email === emailConductor);
 
-  const total_nomina = diez_pcto_total_mes - saldo_anticipo_total_mes - total_prestamos_pendientes;
+//   const total_nomina = diez_pcto_total_mes - saldo_anticipo_total_mes - total_prestamos_pendientes;
 
-  return {
-    emailConductor,
-    nombre: conductor?.nombre || '',
-    mes,
-    total_viajes_mes,
-    diez_pcto_total_mes,
-    saldo_anticipo_total_mes,
-    total_prestamos_pendientes,
-    prestamos_ids: prestamosPendientes.map(p => p.consecutivo),
-    total_nomina,
-    viajes_ids: viajesConductor.map(v => v.consecutivo)
-  };
-};
+//   return {
+//     emailConductor,
+//     nombre: conductor?.nombre || '',
+//     mes,
+//     total_viajes_mes,
+//     diez_pcto_total_mes,
+//     saldo_anticipo_total_mes,
+//     total_prestamos_pendientes,
+//     prestamos_ids: prestamosPendientes.map(p => p.consecutivo),
+//     total_nomina,
+//     viajes_ids: viajesConductor.map(v => v.consecutivo)
+//   };
+// };
 
-const aprobarNomina = async (emailConductor, mes) => {
-  const calculo = await calcularNomina(emailConductor, mes);
+// const aprobarNomina = async (emailConductor, mes) => {
+//   const calculo = await calcularNomina(emailConductor, mes);
 
-  if (!calculo.total_viajes_mes) {
-    throw new Error('No hay viajes para liquidar');
-  }
+//   if (!calculo.total_viajes_mes) {
+//     throw new Error('No hay viajes para liquidar');
+//   }
 
-  const sheets = getSheetsClient();
+//   const sheets = getSheetsClient();
 
-  // Marcar viajes como liquidados
-  const responseViajes = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: 'Viajes!A2:AM1000',
-  });
+//   // Marcar viajes como liquidados
+//   const responseViajes = await sheets.spreadsheets.values.get({
+//     spreadsheetId,
+//     range: 'Viajes!A2:AM1000',
+//   });
 
-  const filasViajes = responseViajes.data.values;
-  const placasAfectadas = new Set();
+//   const filasViajes = responseViajes.data.values;
+//   const placasAfectadas = new Set();
 
-  for (const consecutivo of calculo.viajes_ids) {
-    const filaIndex = filasViajes.findIndex(f => f[0]?.toLowerCase() === consecutivo.toLowerCase());
-    if (filaIndex !== -1) {
-      filasViajes[filaIndex][38] = 'si'; // AM - liquidado
-      placasAfectadas.add(filasViajes[filaIndex][1]); // B - placa
+//   for (const consecutivo of calculo.viajes_ids) {
+//     const filaIndex = filasViajes.findIndex(f => f[0]?.toLowerCase() === consecutivo.toLowerCase());
+//     if (filaIndex !== -1) {
+//       filasViajes[filaIndex][38] = 'si'; // AM - liquidado
+//       placasAfectadas.add(filasViajes[filaIndex][1]); // B - placa
       
-      const filaEnHoja = filaIndex + 2;
-      await sheets.spreadsheets.values.update({
-        spreadsheetId,
-        range: `Viajes!A${filaEnHoja}:AM${filaEnHoja}`,
-        valueInputOption: 'RAW',
-        requestBody: { values: [filasViajes[filaIndex]] },
-      });
-    }
-  }
+//       const filaEnHoja = filaIndex + 2;
+//       await sheets.spreadsheets.values.update({
+//         spreadsheetId,
+//         range: `Viajes!A${filaEnHoja}:AM${filaEnHoja}`,
+//         valueInputOption: 'RAW',
+//         requestBody: { values: [filasViajes[filaIndex]] },
+//       });
+//     }
+//   }
 
-  // Marcar préstamos como liquidados
-  if (calculo.prestamos_ids.length > 0) {
-    await prestamoHelper.marcarPrestamosLiquidados(calculo.prestamos_ids);
-  }
+//   // Marcar préstamos como liquidados
+//   if (calculo.prestamos_ids.length > 0) {
+//     await prestamoHelper.marcarPrestamosLiquidados(calculo.prestamos_ids);
+//   }
 
-  const fecha_pago = new Date().toISOString().split('T')[0];
+//   const fecha_pago = new Date().toISOString().split('T')[0];
 
-  // Guardar registro tipo "viajes" en Nomina_Conductores
-  const nuevaFila = [
-    mes,
-    emailConductor,
-    calculo.nombre,
-    0, // salario_base vacío
-    0, // sso vacío
-    calculo.total_viajes_mes,
-    calculo.diez_pcto_total_mes,
-    calculo.saldo_anticipo_total_mes,
-    calculo.total_prestamos_pendientes,
-    calculo.total_nomina,
-    fecha_pago,
-    'viajes'
-  ];
+//   const consecutivo_nomina = await getSiguienteConsecutivoNomina()
 
-  await sheets.spreadsheets.values.append({
-    spreadsheetId,
-    range: 'Nomina_Conductores!A1',
-    valueInputOption: 'RAW',
-    insertDataOption: 'INSERT_ROWS',
-    requestBody: { values: [nuevaFila] },
-  });
+//   // Guardar registro tipo "viajes" en Nomina_Conductores
+//   const nuevaFila = [
+//     consecutivo_nomina,
+//     mes,
+//     emailConductor,
+//     calculo.nombre,
+//     0, // salario_base vacío
+//     0, // sso vacío
+//     calculo.total_viajes_mes,
+//     calculo.diez_pcto_total_mes,
+//     calculo.saldo_anticipo_total_mes,
+//     calculo.total_prestamos_pendientes,
+//     calculo.total_nomina,
+//     fecha_pago,
+//     'viajes'
+//   ];
 
-  // ===== REGISTRAR EN GASTOS_VEHICULOS (por cada placa afectada) =====
-  for (const placa of placasAfectadas) {
-    await gastosVehiculoHelper.registrarGasto({
-      placa,
-      tipo_gasto: 'nomina_viajes',
-      codigo_referencia: `${emailConductor}_${mes}`,
-      valor_gasto: calculo.total_nomina,
-      descripcion: `Nómina viajes ${mes} - ${calculo.nombre}`,
-      fecha_registro: fecha_pago
-    });
-  }
+//   await sheets.spreadsheets.values.append({
+//     spreadsheetId,
+//     range: 'Nomina_Conductores!A1',
+//     valueInputOption: 'RAW',
+//     insertDataOption: 'INSERT_ROWS',
+//     requestBody: { values: [nuevaFila] },
+//   });
 
-  return calculo;
-};
+//   // ===== REGISTRAR EN GASTOS_VEHICULOS (por cada placa afectada) =====
+//   for (const placa of placasAfectadas) {
+//     await gastosVehiculoHelper.registrarGasto({
+//       placa,
+//       tipo_gasto: 'nomina_viajes',
+//       codigo_referencia: `${emailConductor}_${mes}`,
+//       valor_gasto: calculo.total_nomina,
+//       descripcion: `Nómina viajes ${mes} - ${calculo.nombre}`,
+//       fecha_registro: fecha_pago
+//     });
+//   }
 
-const pagarSalarioMensual = async (emailConductor, mes) => {
-  const sheets = getSheetsClient();
+//   return calculo;
+// };
+
+// const pagarSalarioMensual = async (emailConductor, mes) => {
+//   const sheets = getSheetsClient();
   
-  // Verificar si ya se pagó el salario base este mes
-  const response = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: 'Nomina_Conductores!A2:L1000',
-  });
+//   // Verificar si ya se pagó el salario base este mes
+//   const response = await sheets.spreadsheets.values.get({
+//     spreadsheetId,
+//     range: 'Nomina_Conductores!A2:L1000',
+//   });
 
-  const registros = response.data.values || [];
-  const yaPagado = registros.some(r => 
-    r[1] === emailConductor && 
-    r[0] === mes && 
-    r[11] === 'salario'
-  );
+//   const registros = response.data.values || [];
+//   const yaPagado = registros.some(r => 
+//     r[1] === emailConductor && 
+//     r[0] === mes && 
+//     r[11] === 'salario'
+//   );
 
-  if (yaPagado) {
-    throw new Error('El salario base de este mes ya fue pagado');
-  }
+//   if (yaPagado) {
+//     throw new Error('El salario base de este mes ya fue pagado');
+//   }
 
-  const usuarios = await usuarioHelper.leerUsuariosDesdeSheets();
-  const conductor = usuarios.find(u => u.email === emailConductor);
+//   const usuarios = await usuarioHelper.leerUsuariosDesdeSheets();
+//   const conductor = usuarios.find(u => u.email === emailConductor);
 
-  if (!conductor) {
-    throw new Error('Conductor no encontrado');
-  }
+//   if (!conductor) {
+//     throw new Error('Conductor no encontrado');
+//   }
 
-  const placa_asignada = conductor.placa_asignada;
-  if (!placa_asignada) {
-    throw new Error('Conductor no tiene placa asignada');
-  }
+//   const placa_asignada = conductor.placa_asignada;
+//   if (!placa_asignada) {
+//     throw new Error('Conductor no tiene placa asignada');
+//   }
 
-  const salario_base = parseFloat(conductor.salario_base) || 1000000;
-  const sso = parseFloat(conductor.sso) || 500000;
-  const total = salario_base + sso;
-  const fecha_pago = new Date().toISOString().split('T')[0];
-
-  const nuevaFila = [
-    mes,
-    emailConductor,
-    conductor.nombre,
-    salario_base,
-    sso,
-    0, // total_viajes_mes vacío
-    0, // diez_pcto_total_mes vacío
-    0, // saldo_anticipo_total_mes vacío
-    0, // total_prestamos vacío
-    total,
-    fecha_pago,
-    'salario'
-  ];
-
-  await sheets.spreadsheets.values.append({
-    spreadsheetId,
-    range: 'Nomina_Conductores!A1',
-    valueInputOption: 'RAW',
-    insertDataOption: 'INSERT_ROWS',
-    requestBody: { values: [nuevaFila] },
-  });
-
-  const placas = placa_asignada.split(',').map(p => p.trim());
+//   const salario_base = parseFloat(conductor.salario_base) || 1000000;
+//   const sso = parseFloat(conductor.sso) || 500000;
+//   const total = salario_base + sso;
+//   const fecha_pago = new Date().toISOString().split('T')[0];
   
-  for (const placa of placas) {
-    await gastosVehiculoHelper.registrarGasto({
-      placa,
-      tipo_gasto: 'nomina_salario',
-      codigo_referencia: `${emailConductor}_${mes}`,
-      valor_gasto: total,
-      descripcion: `Salario base ${mes} - ${conductor.nombre}`,
-      fecha_registro: fecha_pago
-    });
-  }
+//   const consecutivo_nomina = await getSiguienteConsecutivoNomina()
 
-  return { salario_base, sso, total };
-};
+//   const nuevaFila = [
+//     consecutivo_nomina,
+//     mes,
+//     emailConductor,
+//     conductor.nombre,
+//     salario_base,
+//     sso,
+//     0, // total_viajes_mes vacío
+//     0, // diez_pcto_total_mes vacío
+//     0, // saldo_anticipo_total_mes vacío
+//     0, // total_prestamos vacío
+//     total,
+//     fecha_pago,
+//     'salario'
+//   ];
+
+//   await sheets.spreadsheets.values.append({
+//     spreadsheetId,
+//     range: 'Nomina_Conductores!A1',
+//     valueInputOption: 'RAW',
+//     insertDataOption: 'INSERT_ROWS',
+//     requestBody: { values: [nuevaFila] },
+//   });
+
+//   const placas = placa_asignada.split(',').map(p => p.trim());
+  
+//   for (const placa of placas) {
+//     await gastosVehiculoHelper.registrarGasto({
+//       placa,
+//       tipo_gasto: 'nomina_salario',
+//       codigo_referencia: `${emailConductor}_${mes}`,
+//       valor_gasto: total,
+//       descripcion: `Salario base ${mes} - ${conductor.nombre}`,
+//       fecha_registro: fecha_pago
+//     });
+//   }
+
+//   return { salario_base, sso, total };
+// };
 
 const editarViajePorConsecutivo = async (consecutivo, nuevosDatos) => {
   const sheets = getSheetsClient();
@@ -1260,11 +1353,10 @@ const actualizarContadoresViaje = async (consecutivo) => {
 
 export const viajeHelper = {
   getViajes,
+  getResumenViajesPorPlaca,
   guardarAnticipo,
   getSiguienteConsecutivo,  
   getViajesByConsecutivo,
-  getResumenViajesPorSolicitante,
-  getResumenViajesPorPlaca,
   getViajesOrdenadosPorAnticipoConductor,
   getViajesOrdenadosPorDiezPcto,
   getViajesOrdenadosPorFechaFin,
@@ -1278,14 +1370,18 @@ export const viajeHelper = {
   getViajesOrdenadosPorValorViajeReal,
   getViajesPorEstadoSaldoCliente,
   getViajesPorEstadoViaje,
+  // getNominasOrdenadosPorFechaPago,
+  // getNominasOrdenadosPorValor,
+  // getNominasOrdenadosPorViajes,
+  getNominasPorTipo,
   editarViajePorConsecutivo,
   subirArchivosACarpetaExistente,
   buscarCarpetaPorNombre,
-  aprobarNomina,
+  // aprobarNomina,
   completarSaldoCliente,
   cerrarViajeYGastosConductor,
-  calcularNomina,
-  pagarSalarioMensual,
+  // calcularNomina,
+  // pagarSalarioMensual,
   facturarCliente,
   aprobarViajeYGastosPropietario,
   facturarViaje,
