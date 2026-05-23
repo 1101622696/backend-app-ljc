@@ -1,6 +1,7 @@
 import { viajeHelper } from '../helpers/viajes.js';
 import { vehiculoHelper } from '../helpers/vehiculos.js';
 import { usuarioHelper } from '../helpers/usuarios.js';
+import { firebaseHelper } from '../helpers/firebase.js';
 import { detalleGastosViajesHelper } from '../helpers/detalles_gastos.js';
 
 const ORDENAMIENTO_HANDLERS = {

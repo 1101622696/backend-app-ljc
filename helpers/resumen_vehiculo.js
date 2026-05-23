@@ -36,7 +36,7 @@ const generarResumenMensual = async (placa, anio, mes) => {
   const total_gastos = total_combustible + total_nominas + total_mantenimientos + total_gastos_viajes;
 
   // 3. Calcular ingresos (ganancia de viajes facturados)
-  const viajes = await viajeHelper.getViajes();
+  const viajes = await viajeHelper.getTodosLosViajes();
   const viajesMes = viajes.filter(v => 
     v.placa === placa && 
     v.fecha_fin_viaje?.startsWith(fechaInicio) &&

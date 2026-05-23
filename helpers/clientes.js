@@ -144,13 +144,15 @@ const editarClienteporCodigo = async (codigo, nuevosDatos) => {
   nuevosDatos.nit || filaActual[2],
   filaActual[3],
   filaActual[4],
-  filaActual[5],
-  nuevosDatos.telefono || filaActual[6],
-  nuevosDatos.email || filaActual[7],
-  nuevosDatos.tipo_pago || filaActual[8],
-  nuevosDatos.rete_fuente || filaActual[9],
-  nuevosDatos.rete_ica || filaActual[10],
+  nuevosDatos.telefono || filaActual[5],
+  nuevosDatos.email || filaActual[6],
+  nuevosDatos.tipo_pago || filaActual[7],
+  nuevosDatos.rete_fuente || filaActual[8],
+  nuevosDatos.rete_ica || filaActual[9],
+  filaActual[10], 
   filaActual[11], 
+  filaActual[12], 
+  filaActual[13], 
 ];
 
   const filaEnHoja = filaIndex + 2; 

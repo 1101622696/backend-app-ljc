@@ -130,7 +130,7 @@ const filtrarNominasPorCampoTexto = (nominas, campo, valor) => {
 };
 
 const calcularNomina = async (emailConductor, mes) => {
-  const viajes = await viajeHelper.getViajes();
+  const viajes = await viajeHelper.getTodosLosViajes();
 
   const viajesConductor = viajes.filter(v =>
     v.correo_usuario === emailConductor &&

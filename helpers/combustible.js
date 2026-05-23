@@ -52,7 +52,7 @@ const getCombustibles = async (pagina = 1, limite = 50) => {
 }
 
 const getCombustibleById = async (consecutivo) => {
-  const combustibles = await getCombustibles();
+  const combustibles = await getTodosLosCombustibles();
   return combustibles.find(combustible => 
     combustible.consecutivo === consecutivo
   );
@@ -74,7 +74,7 @@ const getTodosLosCombustibles = async () => {
 
 const getResumenCombustiblesPorPlaca = async (placas) => {
   try {
-    // const todoslosCombustibles = await getCombustibles()
+    // const todoslosCombustibles = await getTodosLosCombustibles()
 const todoslosCombustibles = await getTodosLosCombustibles()
 
     // convertir a array si llega una sola placa
@@ -136,37 +136,37 @@ const ordenarCombustiblePorCampoNumerico = (combustibles, campo, orden = 'desc')
 };
 
 const getCombustiblesOrdenadosPorGalones = async (orden = 'desc') => {
-  const combustibles = await getCombustibles();
+  const combustibles = await getTodosLosCombustibles();
   return ordenarCombustiblePorCampoNumerico(combustibles, 'galones_cargados', orden);
 };
 
 const getCombustiblesOrdenadosPorValorPagado = async (orden = 'desc') => {
-  const combustibles = await getCombustibles();
+  const combustibles = await getTodosLosCombustibles();
   return ordenarCombustiblePorCampoNumerico(combustibles, 'valor_pagado', orden);
 };
 
 const getCombustiblesOrdenadosPorPrecioPorGalon = async (orden = 'desc') => {
-  const combustibles = await getCombustibles();
+  const combustibles = await getTodosLosCombustibles();
   return ordenarCombustiblePorCampoNumerico(combustibles, 'precio_por_galon', orden);
 };
 
 const getCombustiblesOrdenadosPorRendimientoReal = async (orden = 'desc') => {
-  const combustibles = await getCombustibles();
+  const combustibles = await getTodosLosCombustibles();
   return ordenarCombustiblePorCampoNumerico(combustibles, 'rendimiento_real', orden);
 };
 
 const getCombustiblesPorAlerta = async (valor) => {
-  const combustibles = await getCombustibles();
+  const combustibles = await getTodosLosCombustibles();
   return filtrarCombustiblePorCampoTexto(combustibles, 'alerta', valor);
 };
 
 const getCombustiblesPorEstadoFactura = async (valor) => {
-  const combustibles = await getCombustibles();
+  const combustibles = await getTodosLosCombustibles();
   return filtrarCombustiblePorCampoTexto(combustibles, 'estado_factura', valor);
 };
 
 const getCombustiblesPorMes = async (mes) => {
-  const combustibles = await getCombustibles();
+  const combustibles = await getTodosLosCombustibles();
 
   return combustibles.filter((combustible) => {
     if (!combustible.fecha_registro) return false;
@@ -178,7 +178,7 @@ const getCombustiblesPorMes = async (mes) => {
 };
 
 const getSiguienteConsecutivo = async () => {
-  const registros = await getCombustibles();
+  const registros = await getTodosLosCombustibles();
   
   if (!registros.length) return "COMB-1";
 
@@ -201,7 +201,7 @@ const registrarCombustible = async ({ placa, odometro_actual, galones_cargados, 
   const precio_por_galon = valor_pagado / galones_cargados;
 
   // Buscar último registro de esta placa
-  const registros = await getCombustibles();
+  const registros = await getTodosLosCombustibles();
   const ultimoRegistro = registros.find(r => r.placa === placa);
   
   let km_recorridos = 0;
@@ -596,5 +596,6 @@ export const combustibleHelper = {
   legalizarCombustible,
   editarCombustibleporConsecutivo,
   procesarArchivos,
-  extraerFolderId
+  extraerFolderId,
+  subirArchivosACarpetaExistente
 };

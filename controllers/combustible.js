@@ -93,8 +93,8 @@ registrarCombustible: async (req, res) => {
         link_factura
       });
 
+          await vehiculoHelper.actualizarOdometroVehiculo(placa, odometro_actual);
       
-
       res.status(200).json({
         mensaje: resultado.mensaje,
         consecutivo: resultado.consecutivo,

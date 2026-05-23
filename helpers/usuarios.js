@@ -191,7 +191,7 @@ const editarUsuario= async (email, nuevosDatos) => {
     const filaEditada = [
       nuevosDatos.nombre || filaActual[0],
       nuevosDatos.email || filaActual[1],
-      filaActual[2], 
+      nuevosDatos.password || filaActual[2],
       nuevosDatos.perfil || filaActual[3],
       filaActual[4], 
       nuevosDatos.placa_asignada || filaActual[5], 
@@ -215,7 +215,7 @@ const editarUsuario= async (email, nuevosDatos) => {
       nuevosDatos.num_cuenta || filaActual[23], 
       nuevosDatos.salario_base || filaActual[24], 
       nuevosDatos.sso || filaActual[25], 
-      nuevosDatos.perfil || filaActual[26], 
+      filaActual[26], 
       filaActual[27],
       filaActual[28],
 
@@ -364,7 +364,6 @@ function getColumnLetter(columnNumber) {
     return columnLetter;
 }
 
-// Genera un código de 6 dígitos
 const generarCodigo = () => {
   return Math.floor(100000 + Math.random() * 900000).toString()
 }
