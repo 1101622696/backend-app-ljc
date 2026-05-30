@@ -182,14 +182,11 @@ const getSiguienteConsecutivo = async () => {
   
   if (!registros.length) return "COMB-1";
 
-  // Sacar el número más alto de todos los consecutivos
-  const numeros = registros
-    .map(r => parseInt(r.consecutivo?.split('-')[1], 10) || 0)
-    .filter(n => !isNaN(n));
-
-  const maximo = Math.max(...numeros);
+  const maxNumero = Math.max(
+    ...registros.map((r) => parseInt(r.consecutivo?.split('-')[1], 10) || 0)
+  );
   
-  return `COMB-${maximo + 1}`;
+  return `COMB-${maxNumero + 1}`;
 };
 
 const registrarCombustible = async ({ placa, odometro_actual, galones_cargados, valor_pagado, correo_usuario, usuario, link_factura }) => {

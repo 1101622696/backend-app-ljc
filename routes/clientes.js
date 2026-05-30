@@ -5,8 +5,6 @@ import {validarJWT} from '../middlewares/validar-jwt.js'
 const router=Router()
 
 router.get("/",[validarJWT],httpClientes.obtenerClientes)
-router.get("/activos",[validarJWT],httpClientes.obtenerClientesActivos)
-router.get("/inactivos",[validarJWT],httpClientes.obtenerClientesInactivos)
 router.get('/obtenerdatoscliente/:codigo',[validarJWT], httpClientes.obtenerClienteporCodigo);
 router.get("/ordenados", [validarJWT], httpClientes.obtenerClientesOrdenados);
 router.get("/filtrados", [validarJWT], httpClientes.obtenerClientesFiltrados);

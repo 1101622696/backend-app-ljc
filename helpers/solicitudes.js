@@ -30,11 +30,10 @@ const getSiguienteConsecutivo = async () => {
   
   if (!solicitudes.length) return "S-1";
 
-  const ultimo = solicitudes[0].consecutivo;
-
-  const numero = parseInt(ultimo.split('-')[1], 10) || 0;
-  
-  return `S-${numero + 1}`;
+  const maxNumero = Math.max(
+    ...solicitudes.map((s) => parseInt(s.consecutivo?.split('-')[1], 10) || 0)
+  );
+  return `S-${maxNumero + 1}`;
 };
 
 const guardarSolicitud = async ({ placa, tipo_mantenimiento, descripcion, odometro, correo_usuario, usuario, fecha_creacion, Link}) => {

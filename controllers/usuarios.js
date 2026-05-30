@@ -267,9 +267,18 @@ solicitarRecuperacion: async (req, res) => {
     const { email } = req.body
     const resultado = await usuarioHelper.solicitarRecuperacion(email)
     res.json(resultado)
-  } catch (error) {
-    res.status(400).json({ mensaje: error.message })
   }
+  // catch (error) {
+  //   res.status(400).json({ mensaje: error.message })
+  // }
+  catch (error) {
+  console.error('ERROR RECUPERACION:', error)
+
+  res.status(400).json({
+    mensaje: error.message,
+    stack: error.stack
+  })
+}
 },
 
 verificarCodigo: async (req, res) => {

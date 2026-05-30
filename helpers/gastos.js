@@ -26,10 +26,11 @@ const getSiguienteConsecutivo = async () => {
   
   if (!gastos.length) return "G-1";
 
-  const ultimo = gastos[0].consecutivo;
-  const numero = parseInt(ultimo.split('-')[1], 10) || 0;
+  const maxNumero = Math.max(
+    ...gastos.map((g) => parseInt(g.consecutivo?.split('-')[1], 10) || 0)
+  );
   
-  return `G-${numero + 1}`;
+  return `G-${maxNumero + 1}`;
 };
 
 const getGastoById = async (consecutivo) => {

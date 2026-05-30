@@ -20,22 +20,6 @@ const enviarEmail = async (destinatario, asunto, html) => {
   });
 };
 
-// const leerHoja = async (nombreHoja, rango) => {
-//   const sheets = getSheetsClient();
-//   const res = await sheets.spreadsheets.values.get({
-//     spreadsheetId,
-//     range: `${nombreHoja}!${rango}`,
-//   });
-//   const rows = res.data.values;
-//   if (!rows || rows.length === 0) return [];
-//   const headers = rows[0].map(h => h.trim().toLowerCase());
-//   return rows.slice(1).map((row, rowIndex) =>
-//     Object.fromEntries(
-//       headers.map((h, i) => [h, row[i] ?? ''])
-//     ).valueOf() && { ...Object.fromEntries(headers.map((h, i) => [h, row[i] ?? ''])), _fila: rowIndex + 2 }
-//   );
-// };
-
 const leerHoja = async (nombreHoja, rango) => {
   const sheets = getSheetsClient();
   const res = await sheets.spreadsheets.values.get({

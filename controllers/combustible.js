@@ -102,10 +102,10 @@ registrarCombustible: async (req, res) => {
         alerta: resultado.alerta
       });
 
-const propietario = await usuarioHelper.obtenerPropietarioPorPlaca(placaFinal)
-if (propietario) {
+const destinatarios = await usuarioHelper.obtenerDestinatariosNotificacion(placaFinal)
+for (const email of destinatarios) {
   await firebaseHelper.enviarNotificacion(
-    propietario.email,
+    email, 
     'Vehículo tanqueado',
     `${nombre} ha tanqueado el vehículo ${placaFinal}, #${resultado.consecutivo}`,
     { tipo: 'registro_combustible', consecutivo: resultado.consecutivo }
@@ -118,16 +118,6 @@ if (propietario) {
       res.status(500).json({ mensaje: 'Error interno del servidor' });
     }
 },
-
-// listarCombustibles: async (req, res) => {
-//     try {
-//       const data = await combustibleHelper.getCombustibles();
-//       res.json(data);
-//     } catch (error) {
-//       console.error('Error al obtener datos:', error);
-//       res.status(500).json({ mensaje: 'Error al obtener combustibles' });
-//     }
-// },
 
 listarCombustibles: async (req, res) => {
   try {

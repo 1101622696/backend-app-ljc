@@ -15,8 +15,6 @@ router.get('/facturar-cliente/:codigoCliente', [validarJWT], httpViajes.facturar
 router.get('/gastos/:consecutivo', [validarJWT], httpViajes.obtenerGastosViaje);
 router.get("/ordenados", [validarJWT], httpViajes.obtenerViajesOrdenados);
 router.get("/filtrados", [validarJWT], httpViajes.obtenerViajesFiltrados);
-router.get('/drive-archivos', httpViajes.listarArchivosCarpeta);
-router.get('/drive-archivo/:fileId', httpViajes.servirArchivo);
 
 router.post('/crear', [validarJWT], httpViajes.crearViaje);
 

@@ -16,7 +16,6 @@ router.get('/resumen-solicitante/placa/:placa', [validarJWT], httpVehiculos.obte
 router.post("/crear", [validarJWT, upload.array('archivos')], httpVehiculos.crearVehiculo);
 
 router.put("/editar/:placa",[validarJWT, upload.array('archivos')], httpVehiculos.editarVehiculo)
-
 router.put("/activar/:placa",[validarJWT],httpVehiculos.activarVehiculo)
 router.put("/desactivar/:placa",[validarJWT],httpVehiculos.desactivarVehiculo)
 

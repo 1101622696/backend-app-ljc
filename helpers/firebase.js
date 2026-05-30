@@ -112,25 +112,20 @@ const guardarTokenFCM = async (email, token) => {
 }
 
 const obtenerTokenFCM = async (email) => {
-  const sheets = getSheetsClient();
-
   try {
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: 'Usuarios!A2:AD15',
-    })
-
-    const filas = response.data.values || []
-    const fila = filas.find(f => f[1] === email)
-    if (!fila) return null
-
-    return fila[28] || null 
+    console.log('Buscando token para:', email) // ← agregar
+    const usuarios = await usuarioHelper.getUsuarios()
+    console.log('Total usuarios:', usuarios.length) // ← agregar
+    const usuario = usuarios.find(u => u.email === email)
+    console.log('Usuario encontrado:', usuario?.email, 'token:', usuario?.token) // ← agregar
+    
+    if (!usuario) return null
+    return usuario.token || null
   } catch (error) {
     console.error('Error al obtener token FCM:', error)
     return null
   }
 }
-
 // Enviar notificación push
 const enviarNotificacion = async (email, titulo, mensaje, datos = {}) => {
   try {

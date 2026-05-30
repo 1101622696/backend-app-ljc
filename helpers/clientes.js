@@ -28,11 +28,11 @@ const getSiguienteCodigo = async () => {
 
   if (!clientes.length) return "C-1";
 
-  const ultimo = clientes[clientes.length - 1].codigo;
-
-  const numero = parseInt(ultimo.split('-')[1], 10) || 0;
-
-  return `C-${numero + 1}`;
+  const maxNumero = Math.max(
+    ...clientes.map((c) => parseInt(c.codigo?.split('-')[1], 10) || 0)
+  );
+  
+  return `C-${maxNumero + 1}`;
 };
 
 const guardarCliente = async ({  empresa, nit, estado, viajes, telefono, email,tipo_pago, rete_fuente, rete_ica, fecha_creacion }) => {
@@ -50,13 +50,6 @@ const guardarCliente = async ({  empresa, nit, estado, viajes, telefono, email,t
   });
 
   return { codigo };
-};
-
-const getClienteByStatus = async (status) => {
-  const clientes = await getClientes();
-  return clientes.filter(cliente => 
-    cliente.estado && cliente.estado.toLowerCase() === status.toLowerCase()
-  );
 };
 
 const getClienteById = async (codigo) => {
@@ -279,7 +272,6 @@ function getColumnLetter(columnNumber) {
 export const clienteHelper = {
   getClientes,
   guardarCliente,
-  getClienteByStatus,
   getClienteById,
   getClientesPorEstado,
   getClientesOrdenadosPorViajes,

@@ -2,7 +2,6 @@ import { alertasHelper } from '../helpers/alertas.js';
 
 const httpAlertas = {
 
-  // Permite disparar manualmente las alertas desde Postman o para pruebas
   ejecutarAlertas: async (req, res) => {
     try {
       await alertasHelper.alertaViajesPendientes();

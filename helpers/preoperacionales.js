@@ -30,11 +30,11 @@ const getSiguienteConsecutivo = async () => {
   
   if (!preoperacionales.length) return "Pre-1";
 
-  const ultimo = preoperacionales[0].consecutivo;
-
-  const numero = parseInt(ultimo.split('-')[1], 10) || 0;
+  const maxNumero = Math.max(
+    ...preoperacionales.map((p) => parseInt(p.consecutivo?.split('-')[1], 10) || 0)
+  );
   
-  return `Pre-${numero + 1}`;
+  return `Pre-${maxNumero + 1}`;
 };
 
 const guardarPreoperacional = async ({ codigo_viaje, placa, odometro, nivel_agua, nivel_aceite, galones, fugas_visibles, presion_frenos, fugas_audibles, freno_parqueo, abs_sintestigo, prueba_freno, luces_altas_bajas, direccionales, luces_freno, luces_remolque, testigo_tablero, filtro_aire, volante, sin_fugas, cambios_suave, sin_ruidos, cinturon_seguridad, espejos, extintor_cabezote, extintor_trailer, botiquin, triangulos_reflectivos, kit_carretera, senalizacion_conduzco, correas, estado_carpa, refrigerante, pito, alarma_retroceso, presion_llantas, desgaste_llantas, tuercas_ajustadas, suspension_fisuras, acople_quintarueda, quinta_rueda, pasador_rey, mangueras_aire, seguro_acople, placas_visibles, correo_usuario, usuario, fecha_creacion, Link }) => {

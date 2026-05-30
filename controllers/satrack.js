@@ -1,7 +1,8 @@
 import { satrackHelper } from '../helpers/satrack.js'
 
 const httpSatrack = {
-  posiciones: async (req, res) => {
+
+posiciones: async (req, res) => {
     try {
       const data = await satrackHelper.obtenerUltimasPosiciones()
       res.json({ ok: true, data })
@@ -9,9 +10,9 @@ const httpSatrack = {
       console.error('Error Satrack posiciones:', error)
       res.status(500).json({ mensaje: 'Error al obtener posiciones' })
     }
-  },
+},
 
-  historial: async (req, res) => {
+historial: async (req, res) => {
     try {
       const { serviceCode } = req.params
       const { fechaInicio, fechaFin, pagina = 1 } = req.query
@@ -26,11 +27,11 @@ const httpSatrack = {
       console.error('Error Satrack historial:', error)
       res.status(500).json({ mensaje: 'Error al obtener historial' })
     }
-  },
+},
 
-  guardarResumen: async (req, res) => {
+guardarResumen: async (req, res) => {
     try {
-      const { fecha } = req.body // formato YYYY-MM-DD
+      const { fecha } = req.body 
       const fechaFinal = fecha || new Date().toISOString().split('T')[0]
       const resultado = await satrackHelper.guardarResumenDiario(fechaFinal)
       res.json({ ok: true, filas_guardadas: resultado.length, resultado })
@@ -38,7 +39,8 @@ const httpSatrack = {
       console.error('Error Satrack resumen:', error)
       res.status(500).json({ mensaje: 'Error al guardar resumen' })
     }
-  }
+}
+
 }
 
 export default httpSatrack

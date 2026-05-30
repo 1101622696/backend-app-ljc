@@ -1,5 +1,8 @@
 import nodemailer from 'nodemailer'
 
+console.log('EMAIL_USER:', process.env.EMAIL_USER)
+console.log('EMAIL_PASS existe:', !!process.env.EMAIL_PASS)
+
 const transporter = nodemailer.createTransport({
 
   service: 'gmail',

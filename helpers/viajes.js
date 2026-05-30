@@ -24,17 +24,6 @@ const obtenerDatosViaje = async (nombreHoja, rango = 'A1:AN1000') => {
   );
 };
 
-// const getViajes = async () => {
-//   const viajes = await obtenerDatosViaje('Viajes');
-  
-//   return viajes.sort((a, b) => {
-//     const numA = parseInt(a.consecutivo.replace(/\D/g, ''), 10);
-//     const numB = parseInt(b.consecutivo.replace(/\D/g, ''), 10);
-    
-//     return numB - numA;
-//   });
-// };
-
 const getViajes = async (pagina = 1, limite = 50) => {
   const sheets = getSheetsClient()
   const inicio = (pagina - 1) * limite + 2
@@ -79,24 +68,16 @@ const getTodosLosViajes = async () => {
 
 const getResumenViajesPorPlaca = async (placas) => {
   try {
-    // const todoslosViajes = await getTodosLosViajes()
-const todoslosViajes = await getTodosLosViajes()
+   
+    const todoslosViajes = await getTodosLosViajes()
 
-    // convertir a array si llega una sola placa
     const placasArray = Array.isArray(placas)
       ? placas
       : [placas]
 
-    const placasUpper = placasArray.map(p =>
-      p.trim().toUpperCase()
-    )
+    const placasUpper = placasArray.map(p =>p.trim().toUpperCase())
 
-    const viajesFiltrados =
-      todoslosViajes.filter(p =>
-        placasUpper.includes(
-          p.placa?.trim().toUpperCase()
-        )
-      )
+    const viajesFiltrados = todoslosViajes.filter(p => placasUpper.includes(p.placa?.trim().toUpperCase()))
 
     const mapConDatos = (lista) => {
 
@@ -140,11 +121,6 @@ const filtrarViajesPorCampoTexto = (viajes, campo, valor) => {
 const getViajesPorEstadoSaldoCliente = async (valor) => {
   const viajes = await getTodosLosViajes();
   return filtrarViajesPorCampoTexto(viajes, 'estado_saldo_cliente', valor);
-};
-
-const getNominasPorTipo = async (valor) => {
-  const nominas = await getNominaConductores();
-  return filtrarNominasPorCampoTexto(nominas, 'tipo', valor);
 };
 
 const getViajesPorEstadoViaje = async (valor) => {
@@ -264,11 +240,11 @@ const getSiguienteConsecutivo = async () => {
   
   if (!viajes.length) return "V-1";
 
-  const ultimo = viajes[0].consecutivo;
-
-  const numero = parseInt(ultimo.split('-')[1], 10) || 0;
+  const maxNumero = Math.max(
+    ...viajes.map((v) => parseInt(v.consecutivo?.split('-')[1], 10) || 0)
+  );
   
-  return `V-${numero + 1}`;
+  return `V-${maxNumero + 1}`;
 };
 
 const guardarAnticipo = async ({ placa, cliente, destino, fecha_inicio, valor_anticipo_conductor, valor_tonelada_inicial, correo_usuario, usuario, fecha_creacion, estado_preoperacional  }) => {
@@ -344,21 +320,6 @@ const cerrarViajeYGastosConductor = async (consecutivo, datos, archivos) => {
 
   const filaActual = filas[filaIndex];
 
-  // ===== VALIDAR ARCHIVOS OBLIGATORIOS =====
-// const gastosValidar = [
-//   'peajes', 'lavadas', 'parqueadero', 'engrase',
-//   'fumigacion', 'otro', 'cargue', 'descargue', 'comision'
-// ];
-  
-//   for (const gasto of gastosValidar) {
-//     const valor = parseFloat(datos[`${gasto}_conductor`]) || 0;
-//     const tieneArchivos = archivos && archivos[`${gasto}_conductor_archivos`] && archivos[`${gasto}_conductor_archivos`].length > 0;
-    
-//     if (valor > 0 && !tieneArchivos) {
-//       throw new Error(`Debe adjuntar soporte para ${gasto}_conductor`);
-//     }
-//   }
-
 const gastosValidar = [
   'peajes', 'lavadas', 'parqueadero', 'engrase',
   'fumigacion', 'otro', 'cargue', 'descargue', 'comision'
@@ -366,7 +327,7 @@ const gastosValidar = [
 
 const gastosConSoporte = [
   'peajes', 'lavadas', 'parqueadero', 'engrase',
-  'fumigacion', 'otro', 'cargue'
+  'fumigacion', 'otro'
 ];
 
 for (const gasto of gastosConSoporte) {
@@ -773,7 +734,7 @@ const editarViajePorConsecutivo = async (consecutivo, nuevosDatos) => {
   const filaEnHoja = filaIndex + 2;
   await sheets.spreadsheets.values.update({
     spreadsheetId,
-    range: `Viajes!A${filaEnHoja}:BB${filaEnHoja}`,
+    range: `Viajes!A${filaEnHoja}:AN${filaEnHoja}`,
     valueInputOption: 'RAW',
     requestBody: { values: [filaActual] },
   });
@@ -823,11 +784,12 @@ const facturarCliente = async (codigoCliente) => {
 };
 
 const facturarViaje = async (consecutivo, valor_viaje_real, notas_facturacion, num_factura_cliente) => {
+
   const sheets = getSheetsClient();
 
   const response = await sheets.spreadsheets.values.get({
     spreadsheetId,
-    range: 'Viajes!A2:AM1000',
+    range: 'Viajes!A2:AN1000',
   });
 
   const filas = response.data.values;
@@ -873,7 +835,7 @@ const facturarViaje = async (consecutivo, valor_viaje_real, notas_facturacion, n
   const filaEnHoja = filaIndex + 2;
   await sheets.spreadsheets.values.update({
     spreadsheetId,
-    range: `Viajes!A${filaEnHoja}:AM${filaEnHoja}`,
+    range: `Viajes!A${filaEnHoja}:AN${filaEnHoja}`,
     valueInputOption: 'RAW',
     requestBody: { values: [filaActual] },
   });
@@ -932,27 +894,6 @@ const subirArchivo = async (archivo, carpetaId) => {
   });
   
   return respuesta.data.webViewLink;
-};
-
-const subirArchivosACarpetaExistente = async (archivos, carpetaId) => {
-  if (!archivos || archivos.length === 0) {
-    return null;
-  }
-  
-  const enlaces = [];
-  for (const archivo of archivos) {
-    const enlace = await subirArchivo(archivo, carpetaId);
-    enlaces.push(enlace);
-  }
-  
-  const drive = getDriveClient();
-  
-  const carpeta = await drive.files.get({
-    fileId: carpetaId,
-    fields: 'webViewLink'
-  });
-  
-  return carpeta.data.webViewLink;
 };
 
 const buscarCarpetaPorNombre = async (nombreCarpeta, parentFolderId) => {
@@ -1145,9 +1086,7 @@ export const viajeHelper = {
   getViajesOrdenadosPorValorViajeReal,
   getViajesPorEstadoSaldoCliente,
   getViajesPorEstadoViaje,
-  getNominasPorTipo,
   editarViajePorConsecutivo,
-  subirArchivosACarpetaExistente,
   buscarCarpetaPorNombre,
   completarSaldoCliente,
   cerrarViajeYGastosConductor,

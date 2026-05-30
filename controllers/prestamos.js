@@ -1,4 +1,6 @@
 import { prestamoHelper } from '../helpers/prestamos.js';
+import { firebaseHelper } from '../helpers/firebase.js';
+import { usuarioHelper } from '../helpers/usuarios.js';
 
 const httpPrestamos = {
 
@@ -52,8 +54,20 @@ crearPrestamo: async (req, res) => {
         mensaje: 'Prestamo solicitado correctamente', 
         consecutivo: resultado.consecutivo, 
       });
-    }
   
+const usuarios = await usuarioHelper.getUsuarios()
+const admins = usuarios.filter(u => u.perfil === 'administrador')
+
+for (const admin of admins) {
+  await firebaseHelper.enviarNotificacion(
+    admin.email,
+    'Nueva solicitud de préstamo',
+    `${nombre} ha solicitado un préstamo de $${valor_pedido}, consecutivo: #${resultado.consecutivo}`,
+    { tipo: 'prestamo', consecutivo: resultado.consecutivo }
+  )
+}
+    }
+
   } catch (error) { 
     console.error('Error al guardar el Prestamo:', error); 
     res.status(500).json({ mensaje: 'Error interno del servidor' }); 

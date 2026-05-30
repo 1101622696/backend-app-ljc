@@ -74,11 +74,11 @@ const getSiguienteConsecutivo = async () => {
   
   if (!mantenimientos.length) return "M-1";
 
-  const ultimo = mantenimientos[0].consecutivo;
-
-  const numero = parseInt(ultimo.split('-')[1], 10) || 0;
+  const maxNumero = Math.max(
+    ...mantenimientos.map((m) => parseInt(m.consecutivo?.split('-')[1], 10) || 0)
+  );
   
-  return `M-${numero + 1}`;
+  return `M-${maxNumero + 1}`;
 };
 
 const guardarMantenimiento = async ({ placa, tipo_mantenimiento, descripcion, valor_mantenimiento, odometro, correo_usuario, usuario, fecha_creacion, Link}) => {

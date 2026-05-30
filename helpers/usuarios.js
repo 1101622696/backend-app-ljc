@@ -8,7 +8,7 @@ const spreadsheetId = process.env.SPREADSHEET_ID;
 const leerUsuariosDesdeSheets = async () => {
   const sheets = getSheetsClient();
   
-  const range = 'Usuarios!A1:AB15'; 
+  const range = 'Usuarios!A1:AD15'; 
 
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId,
@@ -398,7 +398,14 @@ const solicitarRecuperacion = async (email) => {
   })
 
   // Enviar email
+  // await enviarCodigoRecuperacion(email, usuario.nombre, codigo)
+
+  try {
   await enviarCodigoRecuperacion(email, usuario.nombre, codigo)
+} catch (error) {
+  console.error('ERROR ENVIANDO EMAIL:', error)
+  throw error
+}
 
   return { mensaje: 'Código enviado al correo' }
 }
@@ -460,6 +467,32 @@ const obtenerPropietarioPorPlaca = async (placa) => {
   ) || null
 }
 
+const obtenerDestinatariosNotificacion = async (placa) => {
+  const usuarios = await leerUsuariosDesdeSheets()
+  
+  const destinatarios = []
+
+  // Buscar propietario de esa placa
+  const propietario = usuarios.find(u => 
+    u.perfil === 'propietario' && 
+    u.placa_asignada?.split(',').map(p => p.trim().toLowerCase()).includes(placa.toLowerCase())
+  )
+
+  if (propietario) destinatarios.push(propietario.email)
+
+  // Siempre agregar administrador(es)
+  const admins = usuarios.filter(u => u.perfil === 'administrador')
+  console.log('Admin email:', admins[0]?.email)
+console.log('Admin keys:', Object.keys(admins[0] || {}))
+  admins.forEach(a => {
+    if (!destinatarios.includes(a.email)) {
+      destinatarios.push(a.email)
+    }
+  })
+
+  return destinatarios
+}
+
 export const usuarioHelper = {
   getUsuarios,
   loginUsuario,
@@ -479,58 +512,6 @@ export const usuarioHelper = {
   solicitarRecuperacion,
   verificarCodigo,
   cambiarPassword,
-  obtenerPropietarioPorPlaca
+  obtenerPropietarioPorPlaca,
+  obtenerDestinatariosNotificacion
 };
-
-
-// const leerUsuariosDesdeSheets = async () => {
-//   const sheets = getSheetsClient();
-//   const range = 'Usuarios!A1:AB15'; 
-//   const res = await sheets.spreadsheets.values.get({
-//     spreadsheetId,
-//     range,
-//   });
-
-//   const rows = res.data.values;
-//   if (rows.length === 0) {
-//     return [];
-//   }
-
-//   const headers = rows[0].map(h => h.trim().toLowerCase());
-//   const data = rows.slice(1).map((fila) => {
-//     const userData = Object.fromEntries(fila.map((valor, i) => [headers[i], valor]));
-//     return {
-//       id: userData.id || '',
-//       email: userData.email || '',
-//       nombre: userData.nombre || '',
-//       password: userData.password || '',
-//       perfil: userData.perfil || '',
-//       estado: userData.estado || '',
-//       placa_asignada: userData.placa_asignada || '',
-//       tipo_documento: userData.tipo_documento || '',
-//       documento: userData.documento || '',
-//       ciudad_expedicion: userData.ciudad_expedicion || '',
-//       fecha_expedicion: userData.fecha_expedicion || '',
-//       pais_nacimiento: userData.pais_nacimiento || '',
-//       ciudad_nacimiento: userData.ciudad_nacimiento || '',
-//       fecha_nacimiento: userData.fecha_nacimiento || '',
-//       grupo_sanguineo_rh: userData.grupo_sanguineo_rh || '',
-//       genero: userData.genero || '',
-//       estado_civil: userData.estado_civil || '',
-//       telefono: userData.telefono || '',
-//       tipo_licencia: userData.tipo_licencia || '',
-//       num_licencia: userData.num_licencia || '',
-//       fecha_expedicion_licencia: userData.fecha_expedicion_licencia || '',
-//       fecha_vencimiento: userData.fecha_vencimiento || '',
-//       viajes_realizados: userData.viajes_realizados || '',
-//       banco: userData.banco || '',
-//       num_cuenta: userData.num_cuenta || '',
-//       salario_base: userData.salario_base || '',
-//       sso: userData.sso || '',
-//       codigo: userData.codigo || '',
-//       fecha_codigo: userData.fecha_codigo || '',
-//     };
-//   });  
-
-//   return data;
-// };

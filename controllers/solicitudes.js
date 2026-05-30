@@ -1,6 +1,7 @@
 import { solicitudHelper } from '../helpers/solicitudes.js';
 import { vehiculoHelper } from '../helpers/vehiculos.js';
 import { usuarioHelper } from '../helpers/usuarios.js';
+import { firebaseHelper } from '../helpers/firebase.js';
 
 const httpSolicitudes = {
 
@@ -107,16 +108,16 @@ crearSolicitud: async (req, res) => {
         mensaje: 'Solicitud guardada correctamente', 
         consecutivo: resultado.consecutivo, 
       });
-    }
   
-    const propietario = await usuarioHelper.obtenerPropietarioPorPlaca(placaFinal)
-    if (propietario) {
-      await firebaseHelper.enviarNotificacion(
-        propietario.email,
+const destinatarios = await usuarioHelper.obtenerDestinatariosNotificacion(placaFinal)
+for (const email of destinatarios) {
+  await firebaseHelper.enviarNotificacion(
+    email,
         'Solicitud de Mantenimiento',
         `${nombre} ha solicitado un mantenimiento para la placa ${placaFinal} consecutivo de la solicitud: #${resultado.consecutivo}`,
         { tipo: 'solicitud_mantenimiento', consecutivo: resultado.consecutivo }
       )
+    }
     }
 
   } catch (error) { 

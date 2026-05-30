@@ -224,7 +224,6 @@ const marcarPrestamosLiquidados = async (consecutivos) => {
   return true;
 };
 
-
 const crearCarpeta = async (nombreCarpeta, parentFolderId) => {
   const drive = getDriveClient();
   
