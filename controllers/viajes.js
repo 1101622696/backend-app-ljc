@@ -75,9 +75,12 @@ crearViaje: async (req, res) => {
     const fecha_creacion = new Date().toISOString().split('T')[0];
     
     // Determinar estado preoperacional (cada 3 viajes por placa)
- const viajesAnteriores = await viajeHelper.contarViajesPorPlaca(placaFinal);
- const numeroViaje = viajesAnteriores + 1; // este será el nuevo viaje
- const estadoPreoperacional = (numeroViaje % 2 === 1) ? 'se debe' : 'no se debe';
+//  const viajesAnteriores = await viajeHelper.contarViajesPorPlaca(placaFinal);
+//  const numeroViaje = viajesAnteriores + 1; // este será el nuevo viaje
+//  const estadoPreoperacional = (numeroViaje % 2 === 1) ? 'se debe' : 'no se debe';
+
+// El preoperacional es obligatorio en cada viaje
+const estadoPreoperacional = 'se debe';
 
     const resultado = await viajeHelper.guardarAnticipo({ 
       placa: placaFinal,
