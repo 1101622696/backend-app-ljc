@@ -1,4 +1,5 @@
-import {clienteHelper} from '../helpers/clientes.js';
+import { clienteHelper } from '../helpers/clientes.js';
+import { responderError } from '../helpers/errores.js';
 
 const ORDENAMIENTO_HANDLERS = {
   viajes: clienteHelper.getClientesOrdenadosPorViajes,
@@ -11,180 +12,108 @@ const ORDENAMIENTO_HANDLERS = {
 const FILTRO_HANDLERS = {
   rete_fuente: clienteHelper.getClientesPorReteFuente,
   tipo_pago: clienteHelper.getClientesPorTipoPago,
-  estado: clienteHelper.getClientesPorEstado
+  estado: clienteHelper.getClientesPorEstado,
 };
 
 const TIPOS_ORDENAMIENTO = Object.keys(ORDENAMIENTO_HANDLERS);
 const TIPOS_FILTRO = Object.keys(FILTRO_HANDLERS);
 
+// Los totales (viajes, valores, ganancia) se calculan con los viajes que el usuario puede ver:
+// el propietario ve la ganancia de SUS viajes con ese cliente; el admin, de todos.
+
 const httpClientes = {
-
-crearCliente: async (req, res) => {
-  try {
-    const {empresa, nit, telefono, email, tipo_pago, rete_fuente, rete_ica} = req.body;
-
-    const estado = req.body.estado || "activo";
-    const economia = req.body.viajes || "0";
-    const fecha_creacion = new Date().toISOString().split('T')[0];
-    const resultado = await clienteHelper.guardarCliente({ empresa, nit, estado, economia, telefono, email, tipo_pago, rete_fuente, rete_ica, fecha_creacion });
-  
-      res.status(200).json({
-        mensaje: 'Cliente guardado correctamente',
-        codigo: resultado.codigo
-      });
-
- } catch (error) { 
-      console.error('Error al guardar cliente:', error);
-      res.status(500).json({ mensaje: 'Error interno del servidor' });
-    }
-},
-  
-obtenerClientes: async (req, res) => {
+  crearCliente: async (req, res) => {
     try {
-      const data = await clienteHelper.getClientes();
-      res.json(data);
+      const resultado = await clienteHelper.guardarCliente(req.body);
+      res.status(201).json({ mensaje: 'Cliente guardado correctamente', codigo: resultado.codigo });
     } catch (error) {
-      console.error('Error al obtener datos:', error);
-      res.status(500).json({ mensaje: 'Error al obtener Clientes' });
+      responderError(res, error, 'Error al guardar cliente');
     }
-},
+  },
 
-obtenerClienteporCodigo: async (req, res) => {
+  obtenerClientes: async (req, res) => {
     try {
-      const { codigo } = req.params;
-      const cliente = await clienteHelper.getClienteById(codigo);
-  
-      if (!cliente) {
-        return res.status(404).json({ mensaje: 'Cliente no encontrado' });
-      }
-  
+      res.json(await clienteHelper.listarConTotales(req.usuariobdtoken));
+    } catch (error) {
+      responderError(res, error, 'Error al obtener clientes');
+    }
+  },
+
+  obtenerClienteporCodigo: async (req, res) => {
+    try {
+      const cliente = await clienteHelper.obtenerConTotales(req.usuariobdtoken, req.params.codigo);
+      if (!cliente) return res.status(404).json({ mensaje: 'Cliente no encontrado' });
       res.json(cliente);
     } catch (error) {
-      console.error('Error al obtener Cliente:', error);
-      res.status(500).json({ mensaje: 'Error al obtener Cliente' });
+      responderError(res, error, 'Error al obtener cliente');
     }
-},
+  },
 
-obtenerClientesOrdenados: async (req, res) => {
-  try {
-    const { tipo = "tiempo", orden = "desc" } = req.query;
-    
-    if (orden !== "asc" && orden !== "desc") {
-      return res
-        .status(400)
-        .json({ mensaje: 'El parámetro orden debe ser "asc" o "desc"' });
-    }
-    
-    const tipoLower = tipo.toLowerCase();
-    if (!TIPOS_ORDENAMIENTO.includes(tipoLower)) {
-      return res
-        .status(400)
-        .json({ 
+  obtenerClientesOrdenados: async (req, res) => {
+    try {
+      const { tipo = 'viajes', orden = 'desc' } = req.query;
+      if (orden !== 'asc' && orden !== 'desc') {
+        return res.status(400).json({ mensaje: 'El parámetro orden debe ser "asc" o "desc"' });
+      }
+      const handler = ORDENAMIENTO_HANDLERS[String(tipo).toLowerCase()];
+      if (!handler) {
+        return res.status(400).json({
           mensaje: `El parámetro tipo debe ser uno de: ${TIPOS_ORDENAMIENTO.join(', ')}`,
-          tiposPermitidos: TIPOS_ORDENAMIENTO
+          tiposPermitidos: TIPOS_ORDENAMIENTO,
         });
+      }
+      res.json(await handler(orden, req.usuariobdtoken));
+    } catch (error) {
+      responderError(res, error, 'Error al ordenar clientes');
     }
-    
-    const handlerFn = ORDENAMIENTO_HANDLERS[tipoLower];
-    const clientes = await handlerFn(orden);
-    
-    res.json(clientes);
-  } catch (error) {
-    console.error("Error al obtener clientes ordenados:", error);
-    res.status(500).json({ mensaje: "Error al obtener clientes" });
-  }
-},
+  },
 
-obtenerClientesFiltrados: async (req, res) => {
-  try {
-    const { tipo, valor } = req.query;
-    
-    if (!tipo || !valor) {
-      return res
-        .status(400)
-        .json({ mensaje: 'Se requieren los parámetros tipo y valor' });
-    }
-    
-    const tipoLower = tipo.toLowerCase();
-    if (!TIPOS_FILTRO.includes(tipoLower)) {
-      return res
-        .status(400)
-        .json({ 
+  obtenerClientesFiltrados: async (req, res) => {
+    try {
+      const { tipo, valor } = req.query;
+      if (!tipo || !valor) return res.status(400).json({ mensaje: 'Se requieren los parámetros tipo y valor' });
+      const handler = FILTRO_HANDLERS[String(tipo).toLowerCase()];
+      if (!handler) {
+        return res.status(400).json({
           mensaje: `El parámetro tipo debe ser uno de: ${TIPOS_FILTRO.join(', ')}`,
-          tiposPermitidos: TIPOS_FILTRO
+          tiposPermitidos: TIPOS_FILTRO,
         });
+      }
+      res.json(await handler(valor, req.usuariobdtoken));
+    } catch (error) {
+      responderError(res, error, 'Error al filtrar clientes');
     }
-    
-    const handlerFn = FILTRO_HANDLERS[tipoLower];
-    const clientes = await handlerFn(valor);
-    
-    res.json(clientes);
-  } catch (error) {
-    console.error("Error al obtener clientes filtrados:", error);
-    res.status(500).json({ mensaje: "Error al obtener clientes", error: error.message });
-  }
-},
+  },
 
-editarCliente: async (req, res) => {
-  try {
-    const { codigo } = req.params;
-    const nuevosDatos = req.body;
-    
-    const resultado = await clienteHelper.editarClienteporCodigo(codigo, nuevosDatos);
-
-    if (!resultado) {
-      return res.status(404).json({ mensaje: 'Cliente no encontrado' });
+  editarCliente: async (req, res) => {
+    try {
+      const resultado = await clienteHelper.editarClienteporCodigo(req.params.codigo, req.body);
+      if (!resultado) return res.status(404).json({ mensaje: 'Cliente no encontrado' });
+      res.json({ mensaje: 'Cliente actualizado correctamente' });
+    } catch (error) {
+      responderError(res, error, 'Error al editar cliente');
     }
+  },
 
-    res.status(200).json({ mensaje: 'Cliente actualizado correctamente' });
-  } catch (error) {
-    console.error('Error al editar Cliente:', error);
-    res.status(500).json({ mensaje: 'Error interno del servidor' });
-  }
-},
-
-activarCliente: async (req, res) => {
-  try {
-    const { codigo } = req.params;
-    const { estado } = req.body; 
-    
-    const resultado = await clienteHelper.actualizarEstadoEnSheets(codigo, estado || "activo");
-    
-    if (!resultado) {
-      return res.status(404).json({ mensaje: 'Cliente no encontrado' });
+  activarCliente: async (req, res) => {
+    try {
+      const resultado = await clienteHelper.actualizarEstadoEnSheets(req.params.codigo, 'activo');
+      if (!resultado) return res.status(404).json({ mensaje: 'Cliente no encontrado' });
+      res.json({ mensaje: 'Cliente activado' });
+    } catch (error) {
+      responderError(res, error, 'Error al activar cliente');
     }
+  },
 
-    res.status(200).json({ mensaje: 'Estado actualizado correctamente' });
-  } catch (error) {
-    console.error('Error al editar estado del Cliente:', error);
-    res.status(500).json({ 
-      mensaje: 'Error al actualizar estado', 
-      error: error.message 
-    });
-  }
-},
-
-desactivarCliente: async (req, res) => {
-  try {
-    const { codigo } = req.params;
-    const { estado } = req.body; 
-    
-    const resultado = await clienteHelper.actualizarEstadoEnSheets(codigo, estado || "inactivo");
-    
-    if (!resultado) {
-      return res.status(404).json({ mensaje: 'Cliente no encontrado' });
+  desactivarCliente: async (req, res) => {
+    try {
+      const resultado = await clienteHelper.actualizarEstadoEnSheets(req.params.codigo, 'inactivo');
+      if (!resultado) return res.status(404).json({ mensaje: 'Cliente no encontrado' });
+      res.json({ mensaje: 'Cliente desactivado' });
+    } catch (error) {
+      responderError(res, error, 'Error al desactivar cliente');
     }
-
-    res.status(200).json({ mensaje: 'Estado actualizado correctamente' });
-  } catch (error) {
-    console.error('Error al editar estado del Cliente:', error);
-    res.status(500).json({ 
-      mensaje: 'Error al actualizar estado', 
-      error: error.message 
-    });
-  }
-},
-
-}
+  },
+};
 
 export default httpClientes;

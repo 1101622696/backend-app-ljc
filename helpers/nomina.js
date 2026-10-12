@@ -1,351 +1,388 @@
-import { getDriveClient, getSheetsClient } from '../services/google.js';
-import { viajeHelper } from '../helpers/viajes.js';
-import { prestamoHelper } from '../helpers/prestamos.js';
-import { usuarioHelper } from '../helpers/usuarios.js';
-import { gastosVehiculoHelper } from '../helpers/gastos.js';
+import { leerHoja, agregarFila, aNumero, siguienteConsecutivo, conCandado } from './hoja.js';
+import { obtenerCarpeta, subirArchivos } from './carpetas.js';
+import { viajeHelper } from './viajes.js';
+import { prestamoHelper } from './prestamos.js';
+import { usuarioHelper } from './usuarios.js';
+import { libroGastos } from './libro_gastos.js';
+import { ahora, hoy, mesActual } from './fechas.js';
+import { ErrorApp } from './errores.js';
 
-const spreadsheetId = process.env.SPREADSHEET_ID;
-const carpetaPadreId = process.env.CARPETA_PADRE_ID_VIAJES;
+// ─────────────────────────────────────────────────────────────
+// Nómina de conductores. Dos liquidaciones independientes:
+//
+// VIAJES (cuando quieran: al cabo de 1 viaje, 2, 15 días…)
+//   saldo de viajes = Σ (10 % − saldo del anticipo) de los viajes liquidados
+//                   + ajustes del 10 % de viajes facturados después de liquidarse
+//
+// SALARIO (una vez por mes)
+//   salario base + seguridad social − préstamos desembolsados (completos)
+//
+// En ambas se suma el "arrastre": si la nómina anterior del conductor quedó negativa,
+// esa deuda se descuenta en la siguiente (de cualquier tipo). Si el total queda negativo,
+// se paga 0 y la diferencia pasa a la siguiente.
+//
+// En Gastos_Vehiculos queda el costo real por placa: el 10 % de los viajes (nomina_viajes)
+// y el salario + SSO (nomina_salario). Los anticipos y préstamos NO son costo del vehículo.
+// ─────────────────────────────────────────────────────────────
 
-const obtenerDatosNomina = async (nombreHoja, rango = 'A1:M1000') => {
-  const sheets = getSheetsClient();
-  const res = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: `${nombreHoja}!${rango}`,
-  });
+const HOJA = 'Nomina_Conductores';
+const CANDADO = 'nomina';
+const carpetaComprobantes = process.env.CARPETA_PADRE_ID_NOMINA;
 
-  const rows = res.data.values;
-  if (!rows || rows.length === 0) return [];
+const minuscula = (v) => String(v ?? '').trim().toLowerCase();
+const numero = (c) => parseInt(String(c).replace(/\D/g, ''), 10) || 0;
+const redondear = (n) => Math.round(n);
 
-  const headers = rows[0].map(h => h.trim().toLowerCase());
-  return rows.slice(1).map(row =>
-    Object.fromEntries(row.map((val, i) => [headers[i], val]))
-  );
-};
+const normalizar = (f) => ({
+  ...f,
+  consecutivo_nomina: String(f.consecutivo_nomina ?? '').trim().toUpperCase(),
+  tipo: minuscula(f.tipo),
+  id_conductor: minuscula(f.id_conductor),
+  mes: String(f.mes ?? '').trim(),
+});
 
-const getNominaConductores = async () => {
-  const nomina = await obtenerDatosNomina('Nomina_Conductores');
-  
-  return nomina.sort((a, b) => {
-    const numA = parseInt(a.consecutivo_nomina.replace(/\D/g, ''), 10);
-    const numB = parseInt(b.consecutivo_nomina.replace(/\D/g, ''), 10);
-    
-    return numB - numA;
-  });
-};
-
-const getNominaByConsecutivo = async (consecutivo) => {
-  const nominas = await getNominaConductores();
-  return nominas.find(nomina => 
-    nomina.consecutivo_nomina && nomina.consecutivo_nomina.toLowerCase() === consecutivo.toLowerCase()
-  );
-};
-
-const getSiguienteConsecutivoNomina = async () => {
-  const nomina = await getNominaConductores()
-  
-  if (!nomina.length) return 'NOM-1' 
-
-  const numeros = nomina
-    .map(r => parseInt(r.consecutivo_nomina?.split('-')[1], 10) || 0)
-    .filter(n => !isNaN(n))
-
-  return `NOM-${Math.max(...numeros) + 1}`
+async function leerNomina() {
+  const { encabezados, filas } = await leerHoja(HOJA);
+  return { encabezados, nominas: filas.filter((f) => f.consecutivo_nomina).map(normalizar) };
 }
 
-const getResumenNominaPorSolicitante = async (email) => {
-  try {
-    const todaslasNominas = await getNominaConductores();
-    const nominafiltrados = todaslasNominas.filter(s => s.id_conductor  === email);
+const sinFila = ({ _fila, ...r }) => r;
 
-    const mapConDatos = (lista) => {
-      return lista.map(r => ({
-        consecutivo_nomina: r.consecutivo_nomina,
-        mes: r.mes || '',
-        id_conductor : r.id_conductor || '',
-        fecha_pago: r.fecha_pago || '',
-        salario_base: r.salario_base || '',
-        sso: r.sso || '',
-        total_viajes_mes: r.total_viajes_mes || '',
-        diez_pcto_total_mes: r.diez_pcto_total_mes || '',
-        saldo_anticipo_total_mes: r.saldo_anticipo_total_mes || '',
-        total_prestamos: r.total_prestamos || '',
-        total_nomina: r.total_nomina || '',
-        tipo: r.tipo || '',
-      }));  
-    };
+// ── Permisos ──
 
-    return {
-      total: {
-        count: nominafiltrados.length,
-        consecutivos: mapConDatos(nominafiltrados)
-      }
-    };
-  } catch (error) {
-    console.error('Error al obtener resumen de nomina por email:', error);
-    throw error;
+async function conductorGestionable(usuario, email) {
+  const conductor = await usuarioHelper.getUsuarioByEmail(email);
+  if (!conductor || conductor.perfil !== 'conductor') throw new ErrorApp(404, 'Conductor no encontrado');
+  const esElMismo = usuario.email === conductor.email;
+  if (!esElMismo && !usuarioHelper.puedeGestionar(usuario, conductor)) {
+    throw new ErrorApp(403, 'Ese conductor no es de sus placas');
+  }
+  return conductor;
+}
+
+const exigirGestion = (usuario) => {
+  if (!['administrador', 'propietario'].includes(usuario.perfil)) {
+    throw new ErrorApp(403, 'Solo el propietario o el administrador liquidan la nómina');
   }
 };
 
-const ordenarNominasPorCampoNumerico = (nominas, campo, orden = 'desc') => {
-  return nominas.sort((a, b) => {
-    const valorA = parseFloat(a[campo]) || 0;
-    const valorB = parseFloat(b[campo]) || 0;
-    
-    return orden.toLowerCase() === 'desc' ? valorB - valorA : valorA - valorB;
-  });
+// ── Arrastre (deuda que viene de la nómina anterior) ──
+
+const arrastreDe = (nominas, email) => {
+  const delConductor = nominas.filter((n) => n.id_conductor === minuscula(email));
+  if (!delConductor.length) return 0;
+  const ultima = delConductor.sort((a, b) => numero(b.consecutivo_nomina) - numero(a.consecutivo_nomina))[0];
+  return Math.min(0, aNumero(ultima.saldo_siguiente));
 };
 
-const getNominasOrdenadosPorValor = async (orden = 'desc') => {
-  const nominas = await getNominaConductores();
-  return ordenarNominasPorCampoNumerico(nominas, 'total_nomina', orden);
-};
+const resultado = (total) => ({
+  total_nomina: redondear(total),
+  valor_pagado: redondear(Math.max(0, total)),
+  saldo_siguiente: redondear(Math.min(0, total)),
+});
 
-const getNominasOrdenadosPorViajes = async (orden = 'desc') => {
-  const nominas = await getNominaConductores();
-  return ordenarNominasPorCampoNumerico(nominas, 'total_viajes_mes', orden);
-};
+// ─────────────────────────────────────────────────────────────
+// Cálculo (vista previa, no guarda nada)
+// ─────────────────────────────────────────────────────────────
 
-const getNominaPorMes = async (mes) => {
-  const nominas = await getNominaConductores();
-
-  return nominas.filter((nomina) => {
-    if (!nomina.fecha_pago) return false;
-
-    const fecha = new Date(nomina.fecha_pago);
-
-    return fecha.getMonth() + 1 === Number(mes);
-  });
-};
-
-const getNominasPorTipo = async (valor) => {
-  const nominas = await getNominaConductores();
-  return filtrarNominasPorCampoTexto(nominas, 'tipo', valor);
-};
-
-const filtrarNominasPorCampoTexto = (nominas, campo, valor) => {
-  return nominas.filter(nomina => 
-    nomina[campo] && nomina[campo].toLowerCase() === valor.toLowerCase()
+/** Viajes. seleccion: lista de consecutivos a liquidar (vacía = todos los pendientes) */
+async function calcularViajes(usuario, conductor, seleccion = []) {
+  const { por_liquidar, con_ajuste } = await viajeHelper.pendientesConductor(
+    usuario.perfil === 'conductor' ? null : usuario,
+    conductor.email
   );
-};
+  const elegidos = seleccion.length
+    ? por_liquidar.filter((v) => seleccion.map((s) => String(s).toUpperCase()).includes(v.consecutivo))
+    : por_liquidar;
 
-const calcularNomina = async (emailConductor, mes) => {
-  const viajes = await viajeHelper.getTodosLosViajes();
+  const diez = elegidos.reduce((s, v) => s + aNumero(v.diez_pcto), 0);
+  const saldoAnticipos = elegidos.reduce((s, v) => s + aNumero(v.saldo_anticipo_conductor), 0);
+  const saldoViajes = elegidos.reduce((s, v) => s + aNumero(v.saldo_pendiente_conductor), 0);
+  const ajustes = con_ajuste.reduce((s, v) => s + aNumero(v.ajuste_diez_pcto_pendiente), 0);
 
-  const viajesConductor = viajes.filter(v =>
-    v.correo_usuario === emailConductor &&
-    (v.estado_viaje === 'aprobado' || v.estado_viaje === 'facturado') && 
-    v.liquidado === 'no'
-  );
-
-  if (!viajesConductor.length) {
-    return { mensaje: 'No hay viajes pendientes de liquidar', total_nomina: 0 };
-  }
-
-  const total_viajes_mes = viajesConductor.length;
-  const diez_pcto_total_mes = viajesConductor.reduce((acc, v) => acc + (parseFloat(v.diez_pcto) || 0), 0);
-  const saldo_anticipo_total_mes = viajesConductor.reduce((acc, v) => acc + (parseFloat(v.saldo_anticipo_conductor) || 0), 0);
-
-  // Buscar préstamos pendientes
-  const prestamos = await prestamoHelper.getPrestamos();
-  const prestamosPendientes = prestamos.filter(p =>
-    p.correo_usuario === emailConductor &&
-    p.estado_prestamo === 'pendiente'
-  );
-
-  const total_prestamos_pendientes = prestamosPendientes.reduce((acc, p) => acc + (parseFloat(p.valor_prestado) || 0), 0);
-
-  const usuarios = await usuarioHelper.leerUsuariosDesdeSheets();
-  const conductor = usuarios.find(u => u.email === emailConductor);
-
-  const total_nomina = diez_pcto_total_mes - saldo_anticipo_total_mes - total_prestamos_pendientes;
+  const { nominas } = await leerNomina();
+  const arrastre = arrastreDe(nominas, conductor.email);
 
   return {
-    emailConductor,
-    nombre: conductor?.nombre || '',
-    mes,
-    total_viajes_mes,
-    diez_pcto_total_mes,
-    saldo_anticipo_total_mes,
-    total_prestamos_pendientes,
-    prestamos_ids: prestamosPendientes.map(p => p.consecutivo),
-    total_nomina,
-    viajes_ids: viajesConductor.map(v => v.consecutivo)
+    tipo: 'viajes',
+    id_conductor: conductor.email,
+    nombre: conductor.nombre,
+    mes: mesActual(),
+    viajes: elegidos.map((v) => ({
+      consecutivo: v.consecutivo,
+      placa: v.placa,
+      destino: v.destino,
+      fecha_inicio: v.fecha_inicio,
+      estado_viaje: v.estado_viaje,
+      diez_pcto: aNumero(v.diez_pcto),
+      saldo_anticipo_conductor: aNumero(v.saldo_anticipo_conductor),
+      saldo_pendiente_conductor: aNumero(v.saldo_pendiente_conductor),
+    })),
+    viajes_disponibles: por_liquidar.map((v) => v.consecutivo),
+    ajustes: con_ajuste.map((v) => ({ consecutivo: v.consecutivo, placa: v.placa, ajuste: aNumero(v.ajuste_diez_pcto_pendiente) })),
+    total_viajes_mes: elegidos.length,
+    diez_pcto_total_mes: redondear(diez),
+    saldo_anticipo_total_mes: redondear(saldoAnticipos),
+    saldo_viajes: redondear(saldoViajes),
+    ajustes_diez_pcto: redondear(ajustes),
+    arrastre_anterior: arrastre,
+    ...resultado(saldoViajes + ajustes + arrastre),
   };
+}
+
+/** Salario del mes 'AAAA-MM' */
+async function calcularSalario(conductor, mes) {
+  if (!/^\d{4}-\d{2}$/.test(mes)) throw new ErrorApp(400, 'Mes no válido (AAAA-MM)');
+
+  const salario = redondear(aNumero(conductor.salario_base));
+  const sso = redondear(aNumero(conductor.sso));
+  if (!salario) throw new ErrorApp(400, `${conductor.nombre} no tiene salario base configurado en Usuarios`);
+
+  const prestamos = await prestamoHelper.desembolsadosSinDescontar(conductor.email);
+  const totalPrestamos = prestamos.reduce((s, p) => s + aNumero(p.valor_prestado), 0);
+
+  const { nominas } = await leerNomina();
+  const yaPagada = nominas.find((n) => n.id_conductor === conductor.email && n.tipo === 'salario' && n.mes === mes);
+  const arrastre = arrastreDe(nominas, conductor.email);
+
+  return {
+    tipo: 'salario',
+    id_conductor: conductor.email,
+    nombre: conductor.nombre,
+    mes,
+    ya_pagada: yaPagada ? yaPagada.consecutivo_nomina : '',
+    salario_base: salario,
+    sso,
+    prestamos: prestamos.map((p) => ({
+      consecutivo: p.consecutivo,
+      valor_prestado: aNumero(p.valor_prestado),
+      fecha_desembolso: p.fecha_desembolso,
+    })),
+    total_prestamos: redondear(totalPrestamos),
+    arrastre_anterior: arrastre,
+    ...resultado(salario + sso - totalPrestamos + arrastre),
+  };
+}
+
+const calcular = async (usuario, email, { tipo = 'viajes', mes = '', viajes = [] } = {}) => {
+  const conductor = await conductorGestionable(usuario, email);
+  return tipo === 'salario' ? calcularSalario(conductor, mes || mesActual()) : calcularViajes(usuario, conductor, viajes);
 };
 
-const aprobarNomina = async (emailConductor, mes) => {
-  const calculo = await calcularNomina(emailConductor, mes);
+// ─────────────────────────────────────────────────────────────
+// Liquidar (guarda)
+// ─────────────────────────────────────────────────────────────
 
-  if (!calculo.total_viajes_mes) {
-    throw new Error('No hay viajes para liquidar');
+async function subirComprobante(archivos, consecutivo) {
+  if (!archivos?.length) return '';
+  if (!carpetaComprobantes) {
+    throw new ErrorApp(500, 'Falta CARPETA_PADRE_ID_NOMINA en el .env para guardar comprobantes de nómina');
   }
+  const carpeta = await obtenerCarpeta(consecutivo, carpetaComprobantes);
+  await subirArchivos(archivos, carpeta.id, 'Pago - ');
+  return carpeta.link;
+}
 
-  const sheets = getSheetsClient();
+const liquidarViajes = (usuario, email, { viajes = [], notas = '' } = {}, archivos = []) =>
+  conCandado(CANDADO, async () => {
+    exigirGestion(usuario);
+    const conductor = await conductorGestionable(usuario, email);
+    const calculo = await calcularViajes(usuario, conductor, viajes);
 
-  // Marcar viajes como liquidados
-  const responseViajes = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: 'Viajes!A2:AM1000',
-  });
+    if (!calculo.viajes.length && !calculo.ajustes.length) {
+      throw new ErrorApp(409, `${conductor.nombre} no tiene viajes aprobados pendientes de liquidar`);
+    }
 
-  const filasViajes = responseViajes.data.values;
-  const placasAfectadas = new Set();
+    const { encabezados, nominas } = await leerNomina();
+    const consecutivo = siguienteConsecutivo(nominas, 'consecutivo_nomina', 'NOM');
+    const link = await subirComprobante(archivos, consecutivo);
+    const placas = [...new Set(calculo.viajes.map((v) => v.placa))];
 
-  for (const consecutivo of calculo.viajes_ids) {
-    const filaIndex = filasViajes.findIndex(f => f[0]?.toLowerCase() === consecutivo.toLowerCase());
-    if (filaIndex !== -1) {
-      filasViajes[filaIndex][38] = 'si'; // AM - liquidado
-      placasAfectadas.add(filasViajes[filaIndex][1]); // B - placa
-      
-      const filaEnHoja = filaIndex + 2;
-      await sheets.spreadsheets.values.update({
-        spreadsheetId,
-        range: `Viajes!A${filaEnHoja}:AM${filaEnHoja}`,
-        valueInputOption: 'RAW',
-        requestBody: { values: [filasViajes[filaIndex]] },
+    await agregarFila(HOJA, encabezados, {
+      consecutivo_nomina: consecutivo,
+      tipo: 'viajes',
+      mes: calculo.mes,
+      id_conductor: conductor.email,
+      nombre: conductor.nombre,
+      fecha_liquidacion: ahora(),
+      liquidado_por: usuario.email,
+      viajes_liquidados: calculo.viajes.map((v) => v.consecutivo).join(', '),
+      total_viajes_mes: calculo.total_viajes_mes,
+      diez_pcto_total_mes: calculo.diez_pcto_total_mes,
+      saldo_anticipo_total_mes: calculo.saldo_anticipo_total_mes,
+      saldo_viajes: calculo.saldo_viajes,
+      viajes_con_ajuste: calculo.ajustes.map((a) => a.consecutivo).join(', '),
+      ajustes_diez_pcto: calculo.ajustes_diez_pcto,
+      arrastre_anterior: calculo.arrastre_anterior,
+      total_nomina: calculo.total_nomina,
+      valor_pagado: calculo.valor_pagado,
+      saldo_siguiente: calculo.saldo_siguiente,
+      fecha_pago: hoy(),
+      link_comprobante: link,
+      placas: placas.join(', '),
+      notas: String(notas ?? '').trim(),
+    });
+
+    await viajeHelper.marcarViajesLiquidados(calculo.viajes.map((v) => v.consecutivo), consecutivo);
+    if (calculo.ajustes.length) await viajeHelper.aplicarAjustes(calculo.ajustes.map((a) => a.consecutivo));
+
+    // Costo del 10 % por placa (incluye ajustes)
+    const porPlaca = {};
+    calculo.viajes.forEach((v) => {
+      porPlaca[v.placa] = (porPlaca[v.placa] || 0) + v.diez_pcto;
+    });
+    calculo.ajustes.forEach((a) => {
+      porPlaca[a.placa] = (porPlaca[a.placa] || 0) + a.ajuste;
+    });
+    for (const [placa, valor] of Object.entries(porPlaca)) {
+      await libroGastos.registrarOActualizar({
+        placa,
+        tipo_gasto: 'nomina_viajes',
+        codigo_referencia: consecutivo,
+        valor_gasto: valor,
+        descripcion: `10 % viajes ${conductor.nombre} (${consecutivo})`,
+        fecha_registro: hoy(),
+        link_soporte: link,
       });
     }
-  }
 
-  // Marcar préstamos como liquidados
-  if (calculo.prestamos_ids.length > 0) {
-    await prestamoHelper.marcarPrestamosLiquidados(calculo.prestamos_ids);
-  }
-
-  const fecha_pago = new Date().toISOString().split('T')[0];
-
-  const consecutivo_nomina = await getSiguienteConsecutivoNomina()
-
-  // Guardar registro tipo "viajes" en Nomina_Conductores
-  const nuevaFila = [
-    consecutivo_nomina,
-    mes,
-    emailConductor,
-    calculo.nombre,
-    0, // salario_base vacío
-    0, // sso vacío
-    calculo.total_viajes_mes,
-    calculo.diez_pcto_total_mes,
-    calculo.saldo_anticipo_total_mes,
-    calculo.total_prestamos_pendientes,
-    calculo.total_nomina,
-    fecha_pago,
-    'viajes'
-  ];
-
-  await sheets.spreadsheets.values.append({
-    spreadsheetId,
-    range: 'Nomina_Conductores!A1',
-    valueInputOption: 'RAW',
-    insertDataOption: 'INSERT_ROWS',
-    requestBody: { values: [nuevaFila] },
+    return { consecutivo_nomina: consecutivo, ...calculo };
   });
 
-  // ===== REGISTRAR EN GASTOS_VEHICULOS (por cada placa afectada) =====
-  for (const placa of placasAfectadas) {
-    await gastosVehiculoHelper.registrarGasto({
-      placa,
-      tipo_gasto: 'nomina_viajes',
-      codigo_referencia: `${emailConductor}_${mes}`,
-      valor_gasto: calculo.total_nomina,
-      descripcion: `Nómina viajes ${mes} - ${calculo.nombre}`,
-      fecha_registro: fecha_pago
-    });
-  }
+const pagarSalario = (usuario, email, { mes = '', notas = '' } = {}, archivos = []) =>
+  conCandado(CANDADO, async () => {
+    exigirGestion(usuario);
+    const conductor = await conductorGestionable(usuario, email);
+    const calculo = await calcularSalario(conductor, mes || mesActual());
+    if (calculo.ya_pagada) throw new ErrorApp(409, `El salario de ${calculo.mes} ya se pagó (${calculo.ya_pagada})`);
 
-  return calculo;
+    const { encabezados, nominas } = await leerNomina();
+    const consecutivo = siguienteConsecutivo(nominas, 'consecutivo_nomina', 'NOM');
+    const link = await subirComprobante(archivos, consecutivo);
+    const placas = usuarioHelper.placasDe(conductor);
+
+    await agregarFila(HOJA, encabezados, {
+      consecutivo_nomina: consecutivo,
+      tipo: 'salario',
+      mes: calculo.mes,
+      id_conductor: conductor.email,
+      nombre: conductor.nombre,
+      fecha_liquidacion: ahora(),
+      liquidado_por: usuario.email,
+      salario_base: calculo.salario_base,
+      sso: calculo.sso,
+      prestamos_descontados: calculo.prestamos.map((p) => p.consecutivo).join(', '),
+      total_prestamos: calculo.total_prestamos,
+      arrastre_anterior: calculo.arrastre_anterior,
+      total_nomina: calculo.total_nomina,
+      valor_pagado: calculo.valor_pagado,
+      saldo_siguiente: calculo.saldo_siguiente,
+      fecha_pago: hoy(),
+      link_comprobante: link,
+      placas: placas.join(', '),
+      notas: String(notas ?? '').trim(),
+    });
+
+    if (calculo.prestamos.length) {
+      await prestamoHelper.marcarLiquidados(calculo.prestamos.map((p) => p.consecutivo), consecutivo);
+    }
+
+    // Salario + SSO es costo del vehículo; si maneja varias placas se reparte por partes iguales
+    const costo = calculo.salario_base + calculo.sso;
+    for (const placa of placas) {
+      await libroGastos.registrarOActualizar({
+        placa,
+        tipo_gasto: 'nomina_salario',
+        codigo_referencia: consecutivo,
+        valor_gasto: costo / placas.length,
+        descripcion: `Salario + SSO ${calculo.mes} ${conductor.nombre} (${consecutivo})`,
+        fecha_registro: hoy(),
+        link_soporte: link,
+      });
+    }
+
+    return { consecutivo_nomina: consecutivo, ...calculo };
+  });
+
+// ─────────────────────────────────────────────────────────────
+// Consultas
+// ─────────────────────────────────────────────────────────────
+
+/** Historial visible: admin todo; propietario sus conductores; conductor lo suyo */
+const historial = async (usuario, { tipo = '', email = '' } = {}) => {
+  const { nominas } = await leerNomina();
+  const visibles = [];
+  for (const n of nominas) {
+    if (usuario.perfil === 'administrador' || n.id_conductor === usuario.email) {
+      visibles.push(n);
+      continue;
+    }
+    const conductor = await usuarioHelper.getUsuarioByEmail(n.id_conductor);
+    if (usuarioHelper.puedeGestionar(usuario, conductor)) visibles.push(n);
+  }
+  return visibles
+    .filter((n) => (!tipo || n.tipo === minuscula(tipo)) && (!email || n.id_conductor === minuscula(email)))
+    .sort((a, b) => numero(b.consecutivo_nomina) - numero(a.consecutivo_nomina))
+    .map(sinFila);
 };
 
-const pagarSalarioMensual = async (emailConductor, mes) => {
-  const sheets = getSheetsClient();
-  
-  // Verificar si ya se pagó el salario base este mes
-  const response = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: 'Nomina_Conductores!A2:M1000',
-  });
+const obtener = async (usuario, consecutivo) => {
+  const lista = await historial(usuario);
+  const nomina = lista.find((n) => n.consecutivo_nomina === String(consecutivo ?? '').trim().toUpperCase());
+  if (!nomina) throw new ErrorApp(404, 'Nómina no encontrada');
+  return nomina;
+};
 
-  const registros = response.data.values || [];
-  const yaPagado = registros.some(r => 
-    r[2] === emailConductor && 
-    r[1] === mes && 
-    r[12] === 'salario'
-  );
-
-  if (yaPagado) {
-    throw new Error('El salario base de este mes ya fue pagado');
+/**
+ * Resumen por conductor de lo pendiente (pantalla "Por liquidar").
+ * Conductor: solo él. Propietario: sus conductores. Admin: todos los conductores activos.
+ */
+const pendientes = async (usuario) => {
+  let conductores;
+  if (usuario.perfil === 'conductor') {
+    conductores = [await usuarioHelper.getUsuarioByEmail(usuario.email)];
+  } else {
+    conductores = (await usuarioHelper.getUsuarios()).filter(
+      (u) => u.perfil === 'conductor' && u.estado === 'activo' && usuarioHelper.puedeGestionar(usuario, u)
+    );
   }
 
-  const usuarios = await usuarioHelper.leerUsuariosDesdeSheets();
-  const conductor = usuarios.find(u => u.email === emailConductor);
+  const { nominas } = await leerNomina();
+  const mes = mesActual();
+  const lista = [];
 
-  if (!conductor) {
-    throw new Error('Conductor no encontrado');
-  }
-
-  const placa_asignada = conductor.placa_asignada;
-  if (!placa_asignada) {
-    throw new Error('Conductor no tiene placa asignada');
-  }
-
-  const salario_base = parseFloat(conductor.salario_base) || 1000000;
-  const sso = parseFloat(conductor.sso) || 500000;
-  const total = salario_base + sso;
-  const fecha_pago = new Date().toISOString().split('T')[0];
-  
-  const consecutivo_nomina = await getSiguienteConsecutivoNomina()
-
-  const nuevaFila = [
-    consecutivo_nomina,
-    mes,
-    emailConductor,
-    conductor.nombre,
-    salario_base,
-    sso,
-    0, // total_viajes_mes vacío
-    0, // diez_pcto_total_mes vacío
-    0, // saldo_anticipo_total_mes vacío
-    0, // total_prestamos vacío
-    total,
-    fecha_pago,
-    'salario'
-  ];
-
-  await sheets.spreadsheets.values.append({
-    spreadsheetId,
-    range: 'Nomina_Conductores!A1',
-    valueInputOption: 'RAW',
-    insertDataOption: 'INSERT_ROWS',
-    requestBody: { values: [nuevaFila] },
-  });
-
-  const placas = placa_asignada.split(',').map(p => p.trim());
-  
-  for (const placa of placas) {
-    await gastosVehiculoHelper.registrarGasto({
-      placa,
-      tipo_gasto: 'nomina_salario',
-      codigo_referencia: `${emailConductor}_${mes}`,
-      valor_gasto: total,
-      descripcion: `Salario base ${mes} - ${conductor.nombre}`,
-      fecha_registro: fecha_pago
+  for (const c of conductores.filter(Boolean)) {
+    const { por_liquidar, con_ajuste } = await viajeHelper.pendientesConductor(usuario.perfil === 'conductor' ? null : usuario, c.email);
+    const prestamos = await prestamoHelper.desembolsadosSinDescontar(c.email);
+    const saldoViajes = por_liquidar.reduce((s, v) => s + aNumero(v.saldo_pendiente_conductor), 0);
+    const ajustes = con_ajuste.reduce((s, v) => s + aNumero(v.ajuste_diez_pcto_pendiente), 0);
+    lista.push({
+      email: c.email,
+      nombre: c.nombre,
+      placas: usuarioHelper.placasDe(c).join(', '),
+      viajes_por_liquidar: por_liquidar.length,
+      saldo_viajes: redondear(saldoViajes),
+      ajustes_diez_pcto: redondear(ajustes),
+      prestamos_por_descontar: redondear(prestamos.reduce((s, p) => s + aNumero(p.valor_prestado), 0)),
+      arrastre_anterior: arrastreDe(nominas, c.email),
+      salario_mes_pagado: nominas.some((n) => n.id_conductor === c.email && n.tipo === 'salario' && n.mes === mes),
+      salario_base: redondear(aNumero(c.salario_base)),
+      sso: redondear(aNumero(c.sso)),
+      mes,
     });
   }
-
-  return { salario_base, sso, total };
+  return lista.sort((a, b) => a.nombre.localeCompare(b.nombre));
 };
+
+// Compatibilidad: las alertas y otros módulos usan getNominaConductores
+const getNominaConductores = async () => (await leerNomina()).nominas.map(sinFila);
 
 export const nominaHelper = {
+  calcular,
+  liquidarViajes,
+  pagarSalario,
+  historial,
+  obtener,
+  pendientes,
   getNominaConductores,
-  getNominaByConsecutivo,
-  getResumenNominaPorSolicitante,
-  getNominaPorMes,
-  getNominasOrdenadosPorValor,
-  getNominasOrdenadosPorViajes,
-  getNominasPorTipo,
-  aprobarNomina,
-  calcularNomina,
-  pagarSalarioMensual,
-
 };

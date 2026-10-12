@@ -1,45 +1,46 @@
 import { satrackHelper } from '../helpers/satrack.js'
+import { ErrorApp, responderError } from '../helpers/errores.js'
 
 const httpSatrack = {
 
-posiciones: async (req, res) => {
+  // GET /posiciones → admin: todas; propietario: solo sus placas
+  posiciones: async (req, res) => {
     try {
-      const data = await satrackHelper.obtenerUltimasPosiciones()
+      const data = await satrackHelper.obtenerUltimasPosiciones(req.usuariobdtoken)
       res.json({ ok: true, data })
     } catch (error) {
-      console.error('Error Satrack posiciones:', error)
-      res.status(500).json({ mensaje: 'Error al obtener posiciones' })
+      responderError(res, error, 'Error Satrack posiciones')
     }
-},
+  },
 
-historial: async (req, res) => {
+  // GET /historial/:serviceCode?fechaInicio=&fechaFin=&pagina=
+  historial: async (req, res) => {
     try {
       const { serviceCode } = req.params
       const { fechaInicio, fechaFin, pagina = 1 } = req.query
 
-      if (!fechaInicio || !fechaFin) {
-        return res.status(400).json({ mensaje: 'Debe enviar fechaInicio y fechaFin' })
-      }
+      if (!fechaInicio || !fechaFin) throw new ErrorApp(400, 'Debe enviar fechaInicio y fechaFin')
+
+      // El propietario solo puede ver el GPS de sus vehículos
+      const vehiculo = await satrackHelper.verificarAccesoServiceCode(req.usuariobdtoken, serviceCode)
 
       const data = await satrackHelper.obtenerHistorial(serviceCode, fechaInicio, fechaFin, pagina)
-      res.json({ ok: true, data })
+      res.json({ ok: true, placa: vehiculo?.placa || null, data })
     } catch (error) {
-      console.error('Error Satrack historial:', error)
-      res.status(500).json({ mensaje: 'Error al obtener historial' })
+      responderError(res, error, 'Error Satrack historial')
     }
-},
+  },
 
-guardarResumen: async (req, res) => {
+  // POST /guardar-resumen { fecha? } → si no se envía fecha, ayer (hora Colombia)
+  guardarResumen: async (req, res) => {
     try {
-      const { fecha } = req.body 
-      const fechaFinal = fecha || new Date().toISOString().split('T')[0]
-      const resultado = await satrackHelper.guardarResumenDiario(fechaFinal)
-      res.json({ ok: true, filas_guardadas: resultado.length, resultado })
+      const { fecha } = req.body || {}
+      const { fecha: fechaFinal, filas, sin_eventos, errores } = await satrackHelper.procesarResumenDiario(fecha)
+      res.json({ ok: true, fecha: fechaFinal, filas_guardadas: filas.length, resultado: filas, sin_eventos, errores })
     } catch (error) {
-      console.error('Error Satrack resumen:', error)
-      res.status(500).json({ mensaje: 'Error al guardar resumen' })
+      responderError(res, error, 'Error Satrack resumen')
     }
-}
+  },
 
 }
 

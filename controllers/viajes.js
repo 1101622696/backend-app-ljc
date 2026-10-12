@@ -1,410 +1,318 @@
 import { viajeHelper } from '../helpers/viajes.js';
-import { vehiculoHelper } from '../helpers/vehiculos.js';
 import { usuarioHelper } from '../helpers/usuarios.js';
 import { firebaseHelper } from '../helpers/firebase.js';
-import { detalleGastosViajesHelper } from '../helpers/detalles_gastos.js';
+import { responderError } from '../helpers/errores.js';
+import { clienteHelper } from '../helpers/clientes.js';
 
-const ORDENAMIENTO_HANDLERS = {
-  anticipo_conductor: viajeHelper.getViajesOrdenadosPorAnticipoConductor,
-  diezpcto: viajeHelper.getViajesOrdenadosPorDiezPcto,
-  fecha_inicio: viajeHelper.getViajesOrdenadosPorFechaInicio,
-  fecha_fin: viajeHelper.getViajesOrdenadosPorFechaFin,
-  ganancia_estimada: viajeHelper.getViajesOrdenadosPorGananciaEstimada,
-  ganancia_real: viajeHelper.getViajesOrdenadosPorGananciaReal,
-  valor_gastos_conductor: viajeHelper.getViajesOrdenadosPorGastosConductor,
-  valor_gastos_propietario: viajeHelper.getViajesOrdenadosPorGastosPropietario,
-  valor_tonelada_inicial: viajeHelper.getViajesOrdenadosPorValorToneladaInicial,
-  valor_tonelada_final: viajeHelper.getViajesOrdenadosPorValorToneladaFinal,
-  valor_viaje_real: viajeHelper.getViajesOrdenadosPorValorViajeReal,
+// ── Notificaciones: se envían DESPUÉS de responder y nunca tumban el servidor ──
+
+const peso = (n) => `$${Math.round(Number(n) || 0).toLocaleString('es-CO')}`;
+
+const notificar = (correos, titulo, mensaje, datos = {}) => {
+  const lista = [...new Set((Array.isArray(correos) ? correos : [correos]).filter(Boolean))];
+  Promise.allSettled(lista.map((correo) => firebaseHelper.enviarNotificacion(correo, titulo, mensaje, datos))).then(
+    (resultados) =>
+      resultados
+        .filter((r) => r.status === 'rejected')
+        .forEach((r) => console.warn('[viajes] Notificación no enviada:', r.reason?.message))
+  );
 };
 
-const FILTRO_HANDLERS = {
-  estado: viajeHelper.getViajesPorEstadoSaldoCliente,
-  estado_viaje: viajeHelper.getViajesPorEstadoViaje
+/** Propietario de la placa + administradores, sin incluir a quien hizo la acción */
+const avisarGestion = async (viaje, quien, titulo, mensaje) => {
+  try {
+    const destinatarios = (await usuarioHelper.obtenerDestinatariosNotificacion(viaje.placa)).filter((c) => c !== quien);
+    notificar(destinatarios, titulo, mensaje, { tipo: 'viaje', consecutivo: viaje.consecutivo });
+  } catch (error) {
+    console.warn('[viajes] No se pudo notificar:', error.message);
+  }
 };
 
-const TIPOS_ORDENAMIENTO = Object.keys(ORDENAMIENTO_HANDLERS);
-const TIPOS_FILTRO = Object.keys(FILTRO_HANDLERS);
+const avisarConductor = (viaje, quien, titulo, mensaje) => {
+  if (viaje.correo_usuario && viaje.correo_usuario !== quien) {
+    notificar(viaje.correo_usuario, titulo, mensaje, { tipo: 'viaje', consecutivo: viaje.consecutivo });
+  }
+};
+
+const archivosDe = (req) => viajeHelper.agruparArchivos(req.files);
+
+// ── Campos permitidos para ordenar / filtrar (admin) ──
+
+const ORDENAMIENTOS = {
+  anticipo_conductor: 'valor_anticipo_conductor',
+  diezpcto: 'diez_pcto',
+  fecha_inicio: 'fecha_inicio',
+  fecha_fin: 'fecha_fin_viaje',
+  ganancia_estimada: 'ganancia_viaje_estimada',
+  ganancia_real: 'ganancia_viaje_real',
+  valor_gastos_conductor: 'total_gastos_conductor',
+  valor_gastos_propietario: 'total_gastos_propietario',
+  valor_tonelada_inicial: 'valor_tonelada_inicial',
+  valor_tonelada_final: 'valor_tonelada_final',
+  valor_viaje_real: 'valor_viaje_real',
+};
+
+const FILTROS = {
+  estado: 'estado_saldo_cliente',
+  estado_viaje: 'estado_viaje',
+  placa: 'placa',
+};
 
 const httpViajes = {
+  // ── Consultas ──
 
-crearViaje: async (req, res) => {
-  try {
-    const { email, nombre, perfil, placa_asignada } = req.usuariobdtoken;
-    const { cliente, destino, fecha_inicio, valor_anticipo_conductor, valor_tonelada_inicial, placa } = req.body;
+  /** Lista de la pantalla de viajes (todos los perfiles; cada uno ve lo suyo) */
+  listarMisViajes: async (req, res) => {
+    try {
+      const { estado = '', placa = '' } = req.query;
+      const pagina = parseInt(req.query.pagina, 10) || 1;
+      const limite = Math.min(parseInt(req.query.limite, 10) || 100, 500);
+      res.json(await viajeHelper.listarViajes(req.usuariobdtoken, { estado, placa, pagina, limite }));
+    } catch (error) {
+      responderError(res, error, 'Error al listar viajes');
+    }
+  },
 
-    let placaFinal;
-    
-    if (perfil === 'conductor') {
-      if (!placa_asignada) {
-        return res.status(400).json({ mensaje: 'No tienes una placa asignada' });
+  /** Admin: todos, más reciente primero (se mantiene por compatibilidad) */
+  obtenerViajes: async (req, res) => {
+    try {
+      const pagina = parseInt(req.query.pagina, 10) || 1;
+      const limite = Math.min(parseInt(req.query.limite, 10) || 50, 500);
+      res.json(await viajeHelper.listarViajes(req.usuariobdtoken, { pagina, limite }));
+    } catch (error) {
+      responderError(res, error, 'Error al obtener viajes');
+    }
+  },
+
+  obtenerViajePorConsecutivo: async (req, res) => {
+    try {
+      res.json(await viajeHelper.obtenerViaje(req.usuariobdtoken, req.params.consecutivo));
+    } catch (error) {
+      responderError(res, error, 'Error al obtener viaje');
+    }
+  },
+
+  obtenerGastosViaje: async (req, res) => {
+    try {
+      res.json(await viajeHelper.obtenerGastosViaje(req.usuariobdtoken, req.params.consecutivo));
+    } catch (error) {
+      responderError(res, error, 'Error al obtener gastos del viaje');
+    }
+  },
+
+  /** Lo usa Preoperacionales. Respuesta: { ok, resumen: { total: { count, consecutivos } } } */
+  obtenerResumenPorPlaca: async (req, res) => {
+    try {
+      const placas = String(req.params.placa || '').split(',').map((p) => p.trim()).filter(Boolean);
+      if (!placas.length) return res.status(400).json({ ok: false, mensaje: 'Placa requerida' });
+      const resumen = await viajeHelper.getResumenViajesPorPlaca(placas);
+      res.json({ ok: true, resumen, placas });
+    } catch (error) {
+      responderError(res, error, 'Error al obtener resumen por placa');
+    }
+  },
+
+  obtenerViajesOrdenados: async (req, res) => {
+    try {
+      const { tipo = '', orden = 'desc' } = req.query;
+      const campo = ORDENAMIENTOS[String(tipo).toLowerCase()];
+      if (!campo || !['asc', 'desc'].includes(orden)) {
+        return res.status(400).json({ mensaje: `tipo debe ser uno de: ${Object.keys(ORDENAMIENTOS).join(', ')}` });
       }
-      placaFinal = placa_asignada;
-      
-    } else if (perfil === 'propietario') {
-      if (!placa_asignada) {
-        return res.status(400).json({ mensaje: 'No tienes placas asignadas' });
+      res.json(await viajeHelper.ordenarViajes(campo, orden));
+    } catch (error) {
+      responderError(res, error, 'Error al ordenar viajes');
+    }
+  },
+
+  obtenerViajesFiltrados: async (req, res) => {
+    try {
+      const { tipo = '', valor = '' } = req.query;
+      const campo = FILTROS[String(tipo).toLowerCase()];
+      if (!campo || !valor) {
+        return res.status(400).json({ mensaje: `tipo debe ser uno de: ${Object.keys(FILTROS).join(', ')}; y valor es obligatorio` });
       }
-      
-      const placasPermitidas = placa_asignada.split(',').map(p => p.trim().toLowerCase());
-      
-      if (!placa || !placasPermitidas.includes(placa.toLowerCase())) {
-        return res.status(400).json({ 
-          mensaje: 'Placa no válida. Tus placas asignadas son: ' + placa_asignada 
-        });
-      }
-      
-      placaFinal = placa;
-      
-    } else if (perfil === 'administrador') {
-      if (!placa) {
-        return res.status(400).json({ mensaje: 'Debes especificar una placa' });
-      }
-      placaFinal = placa;
-      
-    } else {
-      return res.status(403).json({ mensaje: 'Perfil no autorizado para crear viajes' });
+      res.json(await viajeHelper.filtrarViajes(campo, valor));
+    } catch (error) {
+      responderError(res, error, 'Error al filtrar viajes');
     }
+  },
 
-    const vehiculo = await vehiculoHelper.getVehiculoById(placaFinal);
-    
-    if (!vehiculo) {
-      return res.status(404).json({ mensaje: 'Vehículo no encontrado con esa placa' });
+  /** Clientes activos (solo código y nombre) para el formulario de anticipo. Lo usa también el conductor */
+  clientesOpciones: async (req, res) => {
+    try {
+      const clientes = await clienteHelper.getClientes();
+      res.json(
+        clientes
+          .filter((c) => c.codigo && String(c.estado ?? '').trim().toLowerCase() !== 'inactivo')
+          .map((c) => ({ codigo: String(c.codigo).trim(), empresa: c.empresa || '' }))
+          .sort((a, b) => a.empresa.localeCompare(b.empresa))
+      );
+    } catch (error) {
+      responderError(res, error, 'Error al listar clientes');
     }
+  },
 
-    const fecha_creacion = new Date().toISOString().split('T')[0];
-    
-    // Determinar estado preoperacional (cada 3 viajes por placa)
-//  const viajesAnteriores = await viajeHelper.contarViajesPorPlaca(placaFinal);
-//  const numeroViaje = viajesAnteriores + 1; // este será el nuevo viaje
-//  const estadoPreoperacional = (numeroViaje % 2 === 1) ? 'se debe' : 'no se debe';
-
-// El preoperacional es obligatorio en cada viaje
-const estadoPreoperacional = 'se debe';
-
-    const resultado = await viajeHelper.guardarAnticipo({ 
-      placa: placaFinal,
-      cliente, 
-      destino, 
-      fecha_inicio,
-      valor_anticipo_conductor,
-      valor_tonelada_inicial,
-      correo_usuario: email, 
-      usuario: nombre, 
-      fecha_creacion,
-      estado_preoperacional: estadoPreoperacional,
-    });
-   
-    res.status(200).json({ 
-      mensaje: 'Viaje creado correctamente', 
-      consecutivo: resultado.consecutivo, 
-    });
-
-const destinatarios = await usuarioHelper.obtenerDestinatariosNotificacion(placaFinal)
-for (const email of destinatarios) {
-  await firebaseHelper.enviarNotificacion(
-    email,
-        'Solicitud de Anticipo para Nuevo Viaje',
-        `${nombre} ha solicitado un anticipo de ${valor_anticipo_conductor} para iniciar el viaje con destino a: ${destino} para el cliente ${cliente}, consecutivo del viaje: #${resultado.consecutivo}`,
-        { tipo: 'registro_viaje', consecutivo: resultado.consecutivo }
-      )
+  facturarCliente: async (req, res) => {
+    try {
+      res.json({ ok: true, resultado: await viajeHelper.facturarCliente(req.usuariobdtoken, req.params.codigoCliente) });
+    } catch (error) {
+      responderError(res, error, 'Error al consultar viajes por cobrar');
     }
-    
-  } catch (error) { 
-    console.error('Error al crear viaje:', error); 
-    res.status(500).json({ mensaje: 'Error interno del servidor' }); 
-  } 
-},
+  },
 
-obtenerViajes: async (req, res) => {
-  try {
-    const pagina = parseInt(req.query.pagina) || 1
-    const limite = parseInt(req.query.limite) || 50
-    const data = await viajeHelper.getViajes(pagina, limite)
-    res.json(data)
-  } catch (error) {
-    console.error('Error al obtener datos:', error)
-    res.status(500).json({ mensaje: 'Error al obtener viajes' })
-  }
-},
+  // ── Flujo ──
 
-obtenerResumenPorPlaca: async (req, res) => {
-  try {
-    const { placa } = req.params
-    if (!placa) {
-      return res.status(400).json({
-        ok: false,
-        mensaje: 'Placa requerida'
-      })
+  /** 1. El conductor pide el anticipo (o el propietario/admin lo registra por él) */
+  crearViaje: async (req, res) => {
+    try {
+      const usuario = req.usuariobdtoken;
+      const viaje = await viajeHelper.crearViaje(usuario, req.body);
+      res.status(201).json({ mensaje: `Viaje ${viaje.consecutivo} creado. Anticipo solicitado.`, consecutivo: viaje.consecutivo });
+
+      avisarGestion(
+        viaje,
+        usuario.email,
+        `Anticipo solicitado — ${viaje.placa}`,
+        `${viaje.usuario} pide ${peso(viaje.valor_anticipo_conductor)} para el viaje ${viaje.consecutivo} a ${viaje.destino} (${viaje.cliente_nombre}).`
+      );
+      avisarConductor(viaje, usuario.email, `Nuevo viaje ${viaje.consecutivo}`, `Se registró un viaje a ${viaje.destino} a su nombre.`);
+    } catch (error) {
+      responderError(res, error, 'Error al crear viaje');
     }
+  },
 
-    const placas = placa.split(',')
+  /** 2. Propietario/admin registra la consignación del anticipo */
+  consignarAnticipo: async (req, res) => {
+    try {
+      const usuario = req.usuariobdtoken;
+      const viaje = await viajeHelper.consignarAnticipo(usuario, req.params.consecutivo, req.body, archivosDe(req));
+      res.json({ mensaje: 'Anticipo consignado', viaje: viaje.consecutivo });
 
-    const resumen = await viajeHelper.getResumenViajesPorPlaca(placas)
-
-    res.json({
-      ok: true,
-      resumen,
-      placas,
-      mensaje: 'Resumen obtenido exitosamente'
-    })
-
-  } catch (error) {
-    console.error('Error al obtener resumen por placa:', error)
-    res.status(500).json({
-      ok: false,
-      mensaje: 'Error interno del servidor',
-      error: error.message
-    })
-  }
-},
-
-obtenerViajePorConsecutivo: async (req, res) => {
-  try {
-    const { consecutivo } = req.params;
-    const viaje = await viajeHelper.getViajesByConsecutivo(consecutivo);
-
-    if (!viaje) {
-      return res.status(404).json({ mensaje: 'viaje no encontrado' });
+      avisarConductor(
+        viaje,
+        usuario.email,
+        `Anticipo consignado — ${viaje.consecutivo}`,
+        `Le consignaron ${peso(viaje.valor_anticipo_consignado)} para el viaje a ${viaje.destino}.` +
+          (viaje.estado_preoperacional !== 'realizado' ? ' Recuerde hacer el preoperacional.' : '')
+      );
+    } catch (error) {
+      responderError(res, error, 'Error al consignar anticipo');
     }
+  },
 
-    res.json(viaje);
-  } catch (error) {
-    console.error('Error al obtener viaje:', error);
-    res.status(500).json({ mensaje: 'Error al obtener viaje' });
-  }
-},
-
-cerrarViajeYGastosConductor: async (req, res) => {
-  try {
-    const { consecutivo } = req.params;
-    
-    // Organizar archivos por fieldname
-    const archivosOrganizados = {};
-    if (req.files && req.files.length > 0) {
-      req.files.forEach(file => {
-        if (!archivosOrganizados[file.fieldname]) {
-          archivosOrganizados[file.fieldname] = [];
-        }
-        archivosOrganizados[file.fieldname].push(file);
+  /** 4. Cerrar viaje */
+  cerrarViajeYGastosConductor: async (req, res) => {
+    try {
+      const usuario = req.usuariobdtoken;
+      const viaje = await viajeHelper.cerrarViaje(usuario, req.params.consecutivo, req.body, archivosDe(req));
+      res.json({
+        mensaje: 'Viaje cerrado. Queda pendiente de aprobación.',
+        resumen: {
+          valor_viaje_estimado: viaje.valor_viaje_estimado,
+          diez_pcto: viaje.diez_pcto,
+          total_gastos_conductor: viaje.total_gastos_conductor,
+          saldo_anticipo_conductor: viaje.saldo_anticipo_conductor,
+          saldo_pendiente_conductor: viaje.saldo_pendiente_conductor,
+        },
       });
+
+      avisarGestion(
+        viaje,
+        usuario.email,
+        `Viaje ${viaje.consecutivo} listo para aprobar`,
+        `${viaje.usuario} cerró el viaje a ${viaje.destino}. Gastos: ${peso(viaje.total_gastos_conductor)}. Ingrese para revisarlo.`
+      );
+    } catch (error) {
+      responderError(res, error, 'Error al cerrar viaje');
     }
-    
-    const resultado = await viajeHelper.cerrarViajeYGastosConductor(consecutivo, req.body, archivosOrganizados)
+  },
 
-    if (!resultado) return res.status(404).json({ mensaje: 'Viaje no encontrado' })
-
-res.status(200).json({ mensaje: 'Viaje cerrado correctamente', resumen: resultado })
-
-const propietario = await usuarioHelper.obtenerDestinatariosNotificacion(resultado.placa)
-if (propietario) {
-  await firebaseHelper.enviarNotificacion(
-    propietario.email,
-    'Viaje listo para aprobar',
-    `El conductor ha cerrado el viaje #${consecutivo}, ingrese para revisarlo y aprobarlo`,
-    { tipo: 'aprobar_viaje', consecutivo }
-  )
-}
-
-  } catch (error) {
-    console.error('Error al cerrar viaje:', error);
-    res.status(500).json({ mensaje: error.message || 'Error interno del servidor' });
-  }
-},
-
-completarSaldoCliente: async (req, res) => {
-  try {
-    const { consecutivo } = req.params;
-    const resultado = await viajeHelper.completarSaldoCliente(consecutivo);
-    if (!resultado) return res.status(404).json({ mensaje: 'Viaje no encontrado' });
-    res.status(200).json({ mensaje: 'Saldo del cliente completado' });
-  } catch (error) {
-    console.error('Error al completar saldo:', error);
-    res.status(500).json({ mensaje: 'Error interno del servidor' });
-  }
-},
-
-editarViaje: async (req, res) => {
-  try {
-    const { consecutivo } = req.params;
-    const nuevosDatos = req.body;
-
-    const resultado = await viajeHelper.editarViajePorConsecutivo(consecutivo, nuevosDatos);
-
-    if (!resultado) {
-      return res.status(404).json({ mensaje: 'Viaje no encontrado' });
-    }
-
-    res.status(200).json({ mensaje: 'Viaje actualizado correctamente' });
-  } catch (error) {
-    console.error('Error al editar Viaje:', error);
-    res.status(500).json({ mensaje: 'Error interno del servidor' });
-  }
-},
-
-aprobarViajeYGastosPropietario: async (req, res) => {
-  try {
-    const { consecutivo } = req.params;
-    
-    // Organizar archivos por fieldname
-    const archivosOrganizados = {};
-    if (req.files && req.files.length > 0) {
-      req.files.forEach(file => {
-        if (!archivosOrganizados[file.fieldname]) {
-          archivosOrganizados[file.fieldname] = [];
-        }
-        archivosOrganizados[file.fieldname].push(file);
+  /** 5. Aprobar */
+  aprobarViajeYGastosPropietario: async (req, res) => {
+    try {
+      const usuario = req.usuariobdtoken;
+      const viaje = await viajeHelper.aprobarViaje(usuario, req.params.consecutivo, req.body, archivosDe(req));
+      res.json({
+        mensaje: 'Viaje aprobado',
+        resumen: {
+          valor_viaje_estimado: viaje.valor_viaje_estimado,
+          diez_pcto: viaje.diez_pcto,
+          saldo_pendiente_conductor: viaje.saldo_pendiente_conductor,
+          total_gastos_propietario: viaje.total_gastos_propietario,
+          saldo_pendiente_cliente_real: viaje.saldo_pendiente_cliente_real,
+          ganancia_viaje_estimada: viaje.ganancia_viaje_estimada,
+        },
       });
+
+      const saldo = Number(viaje.saldo_pendiente_conductor) || 0;
+      avisarConductor(
+        viaje,
+        usuario.email,
+        `Viaje ${viaje.consecutivo} aprobado`,
+        saldo >= 0
+          ? `Su saldo a favor en este viaje es ${peso(saldo)}. Se paga en la nómina.`
+          : `En este viaje quedó debiendo ${peso(-saldo)}. Se cruza en la nómina.`
+      );
+    } catch (error) {
+      responderError(res, error, 'Error al aprobar viaje');
     }
-    
-    const resultado = await viajeHelper.aprobarViajeYGastosPropietario(consecutivo, req.body, archivosOrganizados);
-    if (!resultado) return res.status(404).json({ mensaje: 'Viaje no encontrado' });
-    res.status(200).json({ mensaje: 'Viaje aprobado correctamente', resumen: resultado });
-  } catch (error) {
-    console.error('Error al aprobar viaje:', error);
-    res.status(500).json({ mensaje: error.message || 'Error interno del servidor' });
-  }
-},
+  },
 
-facturarCliente: async (req, res) => {
-  try {
-    const { codigoCliente } = req.params;
-    const resultado = await viajeHelper.facturarCliente(codigoCliente);
-    res.status(200).json({ ok: true, resultado });
-  } catch (error) {
-    console.error('Error al facturar cliente:', error);
-    res.status(500).json({ mensaje: 'Error interno del servidor' });
-  }
-},
-
-facturarViaje: async (req, res) => {
-  try {
-    const { consecutivo } = req.params;
-    const { valor_viaje_real, notas_facturacion, num_factura_cliente } = req.body;
-    
-    if (!valor_viaje_real) {
-      return res.status(400).json({ mensaje: 'Debe especificar el valor_viaje_real' });
+  /** 6. Facturar */
+  facturarViaje: async (req, res) => {
+    try {
+      const { viaje, ajuste } = await viajeHelper.facturarViaje(req.usuariobdtoken, req.params.consecutivo, req.body);
+      const mensaje = ajuste
+        ? `Viaje facturado. Como ya estaba liquidado, queda un ajuste de ${peso(ajuste)} para la próxima nómina.`
+        : 'Viaje facturado';
+      res.json({
+        mensaje,
+        resumen: {
+          valor_viaje_real: viaje.valor_viaje_real,
+          diferencia_facturacion: viaje.diferencia_facturacion,
+          diez_pcto: viaje.diez_pcto,
+          saldo_pendiente_cliente_real: viaje.saldo_pendiente_cliente_real,
+          ganancia_viaje_real: viaje.ganancia_viaje_real,
+          ajuste_diez_pcto: ajuste,
+        },
+      });
+    } catch (error) {
+      responderError(res, error, 'Error al facturar viaje');
     }
+  },
 
-    const resultado = await viajeHelper.facturarViaje(
-      consecutivo, 
-      parseFloat(valor_viaje_real),
-      notas_facturacion,
-      num_factura_cliente
-    );
-    
-    if (!resultado) {
-      return res.status(404).json({ mensaje: 'Viaje no encontrado' });
+  /** 7. El cliente pagó */
+  completarSaldoCliente: async (req, res) => {
+    try {
+      await viajeHelper.registrarPagoCliente(req.usuariobdtoken, req.params.consecutivo, req.body || {});
+      res.json({ mensaje: 'Pago del cliente registrado' });
+    } catch (error) {
+      responderError(res, error, 'Error al registrar pago del cliente');
     }
+  },
 
-    res.status(200).json({ 
-      mensaje: resultado.mensaje,
-      resumen: resultado
-    });
-  } catch (error) {
-    console.error('Error al facturar viaje:', error);
-    res.status(500).json({ mensaje: error.message || 'Error interno del servidor' });
-  }
-},
-
-legalizarFactura: async (req, res) => {
-  try {
-    const { consecutivo } = req.params;
-    const { tipo_gasto, quien, numero_factura } = req.body;
-    
-    if (!tipo_gasto || !quien) {
-      return res.status(400).json({ mensaje: 'Debe especificar tipo_gasto y quien' });
+  /** 8. Editar (admin, antes de facturar) */
+  editarViaje: async (req, res) => {
+    try {
+      await viajeHelper.editarViaje(req.usuariobdtoken, req.params.consecutivo, req.body, archivosDe(req));
+      res.json({ mensaje: 'Viaje actualizado' });
+    } catch (error) {
+      responderError(res, error, 'Error al editar viaje');
     }
+  },
 
-    const resultado = await detalleGastosViajesHelper.legalizarFacturaIndividual(
-      consecutivo,
-      tipo_gasto,
-      quien,
-      numero_factura
-    );
-    
-    if (!resultado) {
-      return res.status(404).json({ mensaje: 'Gasto no encontrado' });
+  legalizarFactura: async (req, res) => {
+    try {
+      const { tipo_gasto, quien, numero_factura } = req.body;
+      if (!tipo_gasto || !quien) return res.status(400).json({ mensaje: 'Debe especificar tipo_gasto y quien' });
+      const ok = await viajeHelper.legalizarFactura(req.usuariobdtoken, req.params.consecutivo, tipo_gasto, quien, numero_factura);
+      if (!ok) return res.status(404).json({ mensaje: 'Gasto no encontrado' });
+      res.json({ mensaje: 'Factura legalizada' });
+    } catch (error) {
+      responderError(res, error, 'Error al legalizar factura');
     }
-
-    res.status(200).json({ mensaje: 'Factura legalizada correctamente' });
-  } catch (error) {
-    console.error('Error al legalizar factura:', error);
-    res.status(500).json({ mensaje: error.message || 'Error interno del servidor' });
-  }
-},
-
-obtenerGastosViaje: async (req, res) => {
-  try {
-    const { consecutivo } = req.params;
-    const gastos = await detalleGastosViajesHelper.getGastosViaje(consecutivo);
-    res.json(gastos);
-  } catch (error) {
-    console.error('Error al obtener gastos:', error);
-    res.status(500).json({ mensaje: 'Error interno del servidor' });
-  }
-},
-
-obtenerViajesOrdenados: async (req, res) => {
-  try {
-    const { tipo = "tiempo", orden = "desc" } = req.query;
-    
-    if (orden !== "asc" && orden !== "desc") {
-      return res
-        .status(400)
-        .json({ mensaje: 'El parámetro orden debe ser "asc" o "desc"' });
-    }
-    
-    const tipoLower = tipo.toLowerCase();
-    if (!TIPOS_ORDENAMIENTO.includes(tipoLower)) {
-      return res
-        .status(400)
-        .json({ 
-          mensaje: `El parámetro tipo debe ser uno de: ${TIPOS_ORDENAMIENTO.join(', ')}`,
-          tiposPermitidos: TIPOS_ORDENAMIENTO
-        });
-    }
-    
-    const handlerFn = ORDENAMIENTO_HANDLERS[tipoLower];
-    const viajes = await handlerFn(orden);
-    
-    res.json(viajes);
-  } catch (error) {
-    console.error("Error al obtener viajes ordenados:", error);
-    res.status(500).json({ mensaje: "Error al obtener viajes" });
-  }
-},
-
-obtenerViajesFiltrados: async (req, res) => {
-  try {
-    const { tipo, valor } = req.query;
-    
-    if (!tipo || !valor) {
-      return res
-        .status(400)
-        .json({ mensaje: 'Se requieren los parámetros tipo y valor' });
-    }
-    
-    const tipoLower = tipo.toLowerCase();
-    if (!TIPOS_FILTRO.includes(tipoLower)) {
-      return res
-        .status(400)
-        .json({ 
-          mensaje: `El parámetro tipo debe ser uno de: ${TIPOS_FILTRO.join(', ')}`,
-          tiposPermitidos: TIPOS_FILTRO
-        });
-    }
-    
-    const handlerFn = FILTRO_HANDLERS[tipoLower];
-    const viajes = await handlerFn(valor);
-    
-    res.json(viajes);
-  } catch (error) {
-    console.error("Error al obtener viajes filtrados:", error);
-    res.status(500).json({ mensaje: "Error al obtener viajes", error: error.message });
-  }
-},
-
-}
+  },
+};
 
 export default httpViajes;

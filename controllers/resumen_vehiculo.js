@@ -1,60 +1,74 @@
 import { resumenVehiculoHelper } from '../helpers/resumen_vehiculo.js';
+import { ErrorApp, responderError } from '../helpers/errores.js';
+
+// guardar llega como booleano o texto desde el frontend. Si no se envía, se guarda (comportamiento anterior).
+const quiereGuardar = (valor, porDefecto = true) => {
+  if (valor === undefined || valor === null || valor === '') return porDefecto;
+  return !['false', 'no', '0'].includes(String(valor).trim().toLowerCase());
+};
 
 const httpResumenVehiculo = {
 
-generarResumenMensual: async (req, res) => {
+  // POST /resumen-vehiculo/mensual { placa, anio, mes, guardar? }
+  generarResumenMensual: async (req, res) => {
     try {
-      const { placa, anio, mes } = req.body;
-
-      if (!placa || !anio || !mes) {
-        return res.status(400).json({ mensaje: 'Debe especificar placa, anio y mes' });
-      }
+      const { placa, anio, mes, guardar } = req.body || {};
+      if (!placa || !anio || !mes) throw new ErrorApp(400, 'Debe especificar placa, año y mes');
 
       const resumen = await resumenVehiculoHelper.generarResumenMensual(placa, anio, mes);
-      await resumenVehiculoHelper.guardarResumenMensual(resumen);
+      const guardado = quiereGuardar(guardar);
+      if (guardado) await resumenVehiculoHelper.guardarResumenMensual(resumen);
 
       res.status(200).json({
-        mensaje: 'Resumen mensual generado correctamente',
-        resumen
+        mensaje: guardado ? 'Resumen mensual generado y guardado correctamente' : 'Resumen mensual generado correctamente',
+        guardado,
+        resumen,
       });
     } catch (error) {
-      console.error('Error al generar resumen mensual:', error);
-      res.status(500).json({ mensaje: 'Error interno del servidor' });
+      responderError(res, error, 'Error al generar resumen mensual');
     }
-},
+  },
 
-generarResumenAnual: async (req, res) => {
+  // POST /resumen-vehiculo/anual { placa, anio, guardar? }
+  generarResumenAnual: async (req, res) => {
     try {
-      const { placa, anio } = req.body;
+      const { placa, anio, guardar } = req.body || {};
+      if (!placa || !anio) throw new ErrorApp(400, 'Debe especificar placa y año');
 
-      if (!placa || !anio) {
-        return res.status(400).json({ mensaje: 'Debe especificar placa y anio' });
-      }
-
-      const resumen = await resumenVehiculoHelper.generarResumenAnual(placa, anio);
+      const guardado = quiereGuardar(guardar);
+      const resumen = await resumenVehiculoHelper.generarResumenAnual(placa, anio, { guardar: guardado });
 
       res.status(200).json({
-        mensaje: 'Resumen anual generado correctamente',
-        resumen
+        mensaje: guardado ? 'Resumen anual generado y guardado correctamente' : 'Resumen anual generado correctamente',
+        guardado,
+        resumen,
       });
     } catch (error) {
-      console.error('Error al generar resumen anual:', error);
-      res.status(500).json({ mensaje: 'Error interno del servidor' });
+      responderError(res, error, 'Error al generar resumen anual');
     }
-},
+  },
 
-obtenerResumen: async (req, res) => {
+  // GET /resumen-vehiculo/:placa/:anio → [12 meses + TOTAL] calculados al momento
+  obtenerResumen: async (req, res) => {
     try {
       const { placa, anio } = req.params;
-
       const resumen = await resumenVehiculoHelper.getResumenVehiculo(placa, anio);
-
       res.json(resumen);
     } catch (error) {
-      console.error('Error al obtener resumen:', error);
-      res.status(500).json({ mensaje: 'Error interno del servidor' });
+      responderError(res, error, 'Error al obtener resumen');
     }
-}
+  },
+
+  // GET /resumen-vehiculo/flota/:anio/:mes → [resumen de cada vehículo visible para el usuario]
+  obtenerResumenFlota: async (req, res) => {
+    try {
+      const { anio, mes } = req.params;
+      const resumen = await resumenVehiculoHelper.generarResumenFlota(anio, mes, req.usuariobdtoken);
+      res.json(resumen);
+    } catch (error) {
+      responderError(res, error, 'Error al obtener resumen de la flota');
+    }
+  },
 
 };
 

@@ -1,340 +1,213 @@
-import stream from 'stream';
-import { getDriveClient, getSheetsClient } from '../services/google.js';
-import { usuarioHelper } from '../helpers/usuarios.js';
+import { leerHoja, actualizarCampos, agregarFila, aNumero, siguienteConsecutivo, conCandado } from './hoja.js';
+import { obtenerCarpeta, subirArchivos } from './carpetas.js';
+import { usuarioHelper } from './usuarios.js';
+import { ahora, hoy, aFechaISO } from './fechas.js';
+import { ErrorApp } from './errores.js';
 
-const spreadsheetId = process.env.SPREADSHEET_ID;
+// ─────────────────────────────────────────────────────────────
+// Hoja "Prestamos" (por nombre de columna).
+// Estados: pendiente → desembolsado → liquidado (descontado en la nómina de salario)
+//                    ↘ rechazado
+// Se descuentan completos. Si el salario no alcanza, el saldo pasa a la siguiente nómina.
+// ─────────────────────────────────────────────────────────────
+
+const HOJA = 'Prestamos';
+const CANDADO = 'prestamos';
 const carpetaPadreId = process.env.CARPETA_PADRE_ID_PRESTAMOS;
 
-const obtenerDatosPrestamo = async () => {
-  const sheets = getSheetsClient();
-  
-  const range = 'Prestamos!A1:H100'; 
-
-  const res = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range,
-  });
-
-  const rows = res.data.values;
-  if (!rows || rows.length === 0) return [];
-
-  const headers = rows[0].map(h => h.trim().toLowerCase());
-  return rows.slice(1).map(row =>
-    Object.fromEntries(row.map((val, i) => [headers[i], val]))
-  );
+export const ESTADOS_PRESTAMO = {
+  PENDIENTE: 'pendiente',
+  DESEMBOLSADO: 'desembolsado',
+  RECHAZADO: 'rechazado',
+  LIQUIDADO: 'liquidado',
 };
 
-const getPrestamos = () => obtenerDatosPrestamo();
+const minuscula = (v) => String(v ?? '').trim().toLowerCase();
 
-const getSiguienteConsecutivo = async () => {
-  const prestamos = await getPrestamos();
+const normalizar = (f) => ({
+  ...f,
+  consecutivo: String(f.consecutivo ?? '').trim().toUpperCase(),
+  correo_usuario: minuscula(f.correo_usuario),
+  estado_prestamo: minuscula(f.estado_prestamo) || ESTADOS_PRESTAMO.PENDIENTE,
+  valor_pedido: aNumero(f.valor_pedido),
+  valor_prestado: aNumero(f.valor_prestado),
+});
 
-  if (!prestamos.length) return "P-1";
+const numero = (c) => parseInt(String(c).replace(/\D/g, ''), 10) || 0;
 
-  const maxNumero = prestamos.reduce((max, prestamo) => {
-    const consecutivo = prestamo.consecutivo || '';
-
-    const numero = parseInt(consecutivo.split('-')[1], 10);
-
-    return numero > max ? numero : max;
-  }, 0);
-
-  return `P-${maxNumero + 1}`;
-};
-
-const guardarPrestamo = async ({ valor_pedido, valor_prestado, correo_usuario, usuario, fecha_creacion, estado_prestamo, Link}) => {
-  const sheets = getSheetsClient();
-  const consecutivo = await getSiguienteConsecutivo();
- 
-  const nuevaFila = [consecutivo, valor_pedido, valor_prestado, correo_usuario , usuario , fecha_creacion, estado_prestamo, Link];
-
-  await sheets.spreadsheets.values.append({
-    spreadsheetId,
-    range: 'Prestamos!A1',
-    valueInputOption: 'RAW',
-    insertDataOption: 'INSERT_ROWS',
-    requestBody: { values: [nuevaFila] },
-  });
-
-  return { consecutivo };
-};
-
-const getPrestamoByConsecutivo = async (consecutivo) => {
-  const prestamos = await getPrestamos();
-  return prestamos.find(prestamo => 
-    prestamo.consecutivo && prestamo.consecutivo.toLowerCase() === consecutivo.toLowerCase()
-  );
-};
-
-const getResumenPrestamosPorSolicitante = async (email) => {
-  try {
-    const todoslosPrestamos = await getPrestamos();
-    const prestamosFiltrados = todoslosPrestamos.filter(m => m.correo_usuario  === email);
-
-    const mapConDatos = (lista) => {
-      return lista.map(r => ({
-        consecutivo: r.consecutivo,
-        fecha_creacion: r.fecha_creacion || '',
-        correo_usuario : r.correo_usuario || '',
-        usuario: r.usuario || '',
-        link: r.link || '' ,
-        valor_pedido: r.valor_pedido || '',
-        valor_prestado: r.valor_prestado || '',
-
-      }));  
-    };
-
-    return {
-      total: {
-        count: prestamosFiltrados.length,
-        consecutivos: mapConDatos(prestamosFiltrados)
-      }
-    };
-  } catch (error) {
-    console.error('Error al obtener resumen de prestamos por email:', error);
-    throw error;
-  }
-};
-
-const getResumenPrestamosPorPropietario = async (placasPropietario) => {
-  try {
-
-    const todosLosPrestamos = await getPrestamos()
-    const todosLosUsuarios = await usuarioHelper.getUsuarios()
-
-    // Convertir placas del propietario a array limpio
-    const placas = placasPropietario
-      .split(',')
-      .map(p => p.trim().toUpperCase())
-
-    // Usuarios que manejan esas placas
-    const conductoresRelacionados = todosLosUsuarios.filter(usuario => {
-
-      if (!usuario.placa_asignada) return false
-
-      const placasUsuario = usuario.placa_asignada
-        .split(',')
-        .map(p => p.trim().toUpperCase())
-
-      return placasUsuario.some(p =>placas.includes(p))
-    })
-
-    // Emails válidos
-    const emailsConductores = conductoresRelacionados.map(u =>(u.email || '').toLowerCase())
-
-    // Filtrar préstamos
-    const prestamosFiltrados = todosLosPrestamos.filter(prestamo =>
-      emailsConductores.includes(
-        (prestamo.correo_usuario || '').toLowerCase()
-      )
-    )
-
-    const mapConDatos = (lista) => {
-      return lista.map(r => ({
-        consecutivo: r.consecutivo,
-        fecha_creacion: r.fecha_creacion || '',
-        correo_usuario: r.correo_usuario || '',
-        usuario: r.usuario || '',
-        link: r.link || '',
-        valor_pedido: r.valor_pedido || '',
-        valor_prestado: r.valor_prestado || '',
-      }))
-    }
-
-    return {
-      total: {
-        count: prestamosFiltrados.length,
-        consecutivos: mapConDatos(prestamosFiltrados)
-      }
-    }
-
-  } catch (error) { 
-    console.error('Error al obtener préstamos del propietario:', error)
-    throw error
-  }
+async function leerPrestamos() {
+  const { encabezados, filas } = await leerHoja(HOJA);
+  return { encabezados, prestamos: filas.filter((f) => f.consecutivo).map(normalizar) };
 }
 
-const editarPrestamoporConsecutivo = async (consecutivo, nuevosDatos) => {
-  const sheets = getSheetsClient();
+const sinFila = ({ _fila, ...resto }) => resto;
 
-  const response = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: 'Prestamos!A2:H1000', 
+/** Todos (uso interno) */
+const getPrestamos = async () => (await leerPrestamos()).prestamos.map(sinFila);
+
+// ── Permisos: el conductor ve los suyos; el propietario los de sus conductores; el admin todos ──
+
+async function puedeVer(usuario, prestamo) {
+  if (usuario.perfil === 'administrador') return true;
+  if (prestamo.correo_usuario === usuario.email) return true;
+  const conductor = await usuarioHelper.getUsuarioByEmail(prestamo.correo_usuario);
+  return usuarioHelper.puedeGestionar(usuario, conductor);
+}
+
+async function exigirGestion(usuario, prestamo) {
+  const conductor = await usuarioHelper.getUsuarioByEmail(prestamo.correo_usuario);
+  if (!usuarioHelper.puedeGestionar(usuario, conductor)) throw new ErrorApp(403, 'No tiene permiso sobre este préstamo');
+}
+
+async function buscar(consecutivo) {
+  const { encabezados, prestamos } = await leerPrestamos();
+  const prestamo = prestamos.find((p) => p.consecutivo === String(consecutivo ?? '').trim().toUpperCase());
+  if (!prestamo) throw new ErrorApp(404, 'Préstamo no encontrado');
+  return { encabezados, prestamo };
+}
+
+// ── Consultas ──
+
+/** Lista visible para el usuario, más reciente primero, con totales por estado */
+const listar = async (usuario, { estado = '' } = {}) => {
+  const { prestamos } = await leerPrestamos();
+  const visibles = [];
+  for (const p of prestamos) if (await puedeVer(usuario, p)) visibles.push(p);
+  visibles.sort((a, b) => numero(b.consecutivo) - numero(a.consecutivo));
+
+  const totales = {};
+  visibles.forEach((p) => {
+    totales[p.estado_prestamo] = (totales[p.estado_prestamo] || 0) + 1;
   });
 
-  const filas = response.data.values;
-  const filaIndex = filas.findIndex(fila => fila[0]?.toLowerCase() === consecutivo.toLowerCase());
+  const datos = (estado ? visibles.filter((p) => p.estado_prestamo === minuscula(estado)) : visibles).map(sinFila);
+  const porDescontar = visibles
+    .filter((p) => p.estado_prestamo === ESTADOS_PRESTAMO.DESEMBOLSADO)
+    .reduce((s, p) => s + p.valor_prestado, 0);
 
-  if (filaIndex === -1) {
-    return null; 
-  }
-
-  // teer los datos actuales
-  const filaActual = filas[filaIndex];
-  
-  const filaEditada = [
-  filaActual[0], 
-  nuevosDatos.valor_pedido || filaActual[1],
-  nuevosDatos.valor_prestado || filaActual[2],
-  filaActual[3], 
-  filaActual[4], 
-  filaActual[5], 
-  filaActual[6], 
-  nuevosDatos.Link || filaActual[7],
-];
-
-  const filaEnHoja = filaIndex + 2; 
-
-  await sheets.spreadsheets.values.update({
-    spreadsheetId,
-    range: `Prestamos!A${filaEnHoja}:H${filaEnHoja}`,
-    valueInputOption: 'RAW',
-    requestBody: {
-      values: [filaEditada],
-    },
-  });
-
-  return true;
+  return { datos, totales, por_descontar: porDescontar };
 };
 
-const marcarPrestamosLiquidados = async (consecutivos) => {
-  const sheets = getSheetsClient();
+const obtener = async (usuario, consecutivo) => {
+  const { prestamo } = await buscar(consecutivo);
+  if (!(await puedeVer(usuario, prestamo))) throw new ErrorApp(404, 'Préstamo no encontrado');
+  return sinFila(prestamo);
+};
 
-  const response = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: 'Prestamos!A2:H1000',
-  });
+/** Para la nómina: préstamos desembolsados aún sin descontar de un conductor */
+const desembolsadosSinDescontar = async (email) =>
+  (await getPrestamos()).filter(
+    (p) => p.correo_usuario === minuscula(email) && p.estado_prestamo === ESTADOS_PRESTAMO.DESEMBOLSADO
+  );
 
-  const filas = response.data.values;
+// ── Acciones ──
 
-  for (const consecutivo of consecutivos) {
-    const filaIndex = filas.findIndex(f => f[0]?.toLowerCase() === consecutivo.toLowerCase());
-    if (filaIndex !== -1) {
-      filas[filaIndex][6] = 'liquidado'; // G - estado_prestamo
-      const filaEnHoja = filaIndex + 2;
-      await sheets.spreadsheets.values.update({
-        spreadsheetId,
-        range: `Prestamos!A${filaEnHoja}:H${filaEnHoja}`,
-        valueInputOption: 'RAW',
-        requestBody: { values: [filas[filaIndex]] },
-      });
+/** El conductor pide un préstamo (o el admin/propietario lo registra por él) */
+const solicitar = (usuario, datos) =>
+  conCandado(CANDADO, async () => {
+    let conductor;
+    if (usuario.perfil === 'conductor') {
+      conductor = await usuarioHelper.getUsuarioByEmail(usuario.email);
+    } else {
+      conductor = await usuarioHelper.getUsuarioByEmail(datos.correo_conductor);
+      if (!conductor || conductor.perfil !== 'conductor') throw new ErrorApp(400, 'Seleccione el conductor');
+      if (!usuarioHelper.puedeGestionar(usuario, conductor)) throw new ErrorApp(403, 'Ese conductor no es de sus placas');
     }
-  }
 
-  return true;
-};
+    const valor = Math.round(aNumero(datos.valor_pedido));
+    if (valor <= 0) throw new ErrorApp(400, 'Ingrese el valor del préstamo');
 
-const crearCarpeta = async (nombreCarpeta, parentFolderId) => {
-  const drive = getDriveClient();
-  
-  const fileMetadata = {
-    name: nombreCarpeta,
-    mimeType: 'application/vnd.google-apps.folder',
-    parents: parentFolderId ? [parentFolderId] : []
-  };
-  
-  const respuesta = await drive.files.create({
-    resource: fileMetadata,
-    fields: 'id, webViewLink'
+    const { encabezados, prestamos } = await leerPrestamos();
+    const abierto = prestamos.find((p) => p.correo_usuario === conductor.email && p.estado_prestamo === ESTADOS_PRESTAMO.PENDIENTE);
+    if (abierto) throw new ErrorApp(409, `Ya tiene el préstamo ${abierto.consecutivo} pendiente de respuesta`);
+
+    const nuevo = {
+      consecutivo: siguienteConsecutivo(prestamos, 'consecutivo', 'P'),
+      correo_usuario: conductor.email,
+      usuario: conductor.nombre,
+      valor_pedido: valor,
+      motivo: String(datos.motivo ?? '').trim(),
+      fecha_creacion: ahora(),
+      estado_prestamo: ESTADOS_PRESTAMO.PENDIENTE,
+      valor_prestado: 0,
+      registrado_por: usuario.email,
+    };
+    await agregarFila(HOJA, encabezados, nuevo);
+    return { ...nuevo, placas: usuarioHelper.placasDe(conductor) };
   });
-  
-  return respuesta.data;
-};
 
-const subirArchivo = async (archivo, carpetaId) => {
-  const drive = getDriveClient();
-  
-  const fileMetadata = {
-    name: archivo.originalname,
-    parents: [carpetaId]
-  };
-  
-  const bufferStream = new stream.PassThrough();
-  bufferStream.end(archivo.buffer);
-  
-  const media = {
-    mimeType: archivo.mimetype,
-    body: bufferStream
-  };
-  
-  const respuesta = await drive.files.create({
-    resource: fileMetadata,
-    media: media,
-    fields: 'id, webViewLink'
+/** Propietario/admin registra el desembolso con comprobante */
+const desembolsar = (usuario, consecutivo, datos, archivos = []) =>
+  conCandado(CANDADO, async () => {
+    const { encabezados, prestamo } = await buscar(consecutivo);
+    await exigirGestion(usuario, prestamo);
+    if (prestamo.estado_prestamo !== ESTADOS_PRESTAMO.PENDIENTE) {
+      throw new ErrorApp(409, `El préstamo ya está ${prestamo.estado_prestamo}`);
+    }
+
+    const valor = Math.round(aNumero(datos.valor_prestado));
+    if (valor <= 0) throw new ErrorApp(400, 'Ingrese el valor prestado');
+    if (!archivos.length) throw new ErrorApp(400, 'Adjunte el comprobante del desembolso');
+
+    const carpeta = await obtenerCarpeta(prestamo.consecutivo, carpetaPadreId);
+    await subirArchivos(archivos, carpeta.id, 'Desembolso - ');
+
+    const cambios = {
+      valor_prestado: valor,
+      fecha_desembolso: aFechaISO(datos.fecha_desembolso) || hoy(),
+      desembolsado_por: usuario.email,
+      link_comprobante: carpeta.link,
+      estado_prestamo: ESTADOS_PRESTAMO.DESEMBOLSADO,
+    };
+    await actualizarCampos(HOJA, encabezados, prestamo._fila, cambios, { omitirFaltantes: true });
+    return { ...sinFila(prestamo), ...cambios };
   });
-  
-  return respuesta.data.webViewLink;
-};
 
-const procesarArchivos = async (archivos, consecutivo) => {
-  if (!archivos || archivos.length === 0) {
-    return null;
-  }
-    
-  let carpeta = await buscarCarpetaPorNombre(consecutivo, carpetaPadreId);
-  
-  if (!carpeta) {
-    carpeta = await crearCarpeta(consecutivo, carpetaPadreId);
-  }
-  
-  const enlaces = [];
-  for (const archivo of archivos) {
-    const enlace = await subirArchivo(archivo, carpeta.id);
-    enlaces.push(enlace);
-  }
-  
-  return carpeta.webViewLink;
-};
-
-const subirArchivosACarpetaExistente = async (archivos, carpetaId) => {
-  if (!archivos || archivos.length === 0) {
-    return null;
-  }
-  
-  // Subir cada archivo a la carpeta existente
-  const enlaces = [];
-  for (const archivo of archivos) {
-    const enlace = await subirArchivo(archivo, carpetaId);
-    enlaces.push(enlace);
-  }
-  
-  // Devolver el enlace a la carpeta (necesitamos obtenerlo)
-  const drive = getDriveClient();
-  const carpeta = await drive.files.get({
-    fileId: carpetaId,
-    fields: 'webViewLink'
+const rechazar = (usuario, consecutivo, datos) =>
+  conCandado(CANDADO, async () => {
+    const { encabezados, prestamo } = await buscar(consecutivo);
+    await exigirGestion(usuario, prestamo);
+    if (prestamo.estado_prestamo !== ESTADOS_PRESTAMO.PENDIENTE) {
+      throw new ErrorApp(409, `El préstamo ya está ${prestamo.estado_prestamo}`);
+    }
+    const cambios = {
+      estado_prestamo: ESTADOS_PRESTAMO.RECHAZADO,
+      motivo_rechazo: String(datos.motivo_rechazo ?? '').trim(),
+      desembolsado_por: usuario.email,
+    };
+    await actualizarCampos(HOJA, encabezados, prestamo._fila, cambios, { omitirFaltantes: true });
+    return { ...sinFila(prestamo), ...cambios };
   });
-  
-  return carpeta.data.webViewLink;
-};
 
-const buscarCarpetaPorNombre = async (nombreCarpeta, parentFolderId) => {
-  const drive = getDriveClient();
-  
-  // Crear consulta para buscar por nombre exacto dentro de la carpeta padre
-  let query = `name = '${nombreCarpeta}' and mimeType = 'application/vnd.google-apps.folder'`;
-  if (parentFolderId) {
-    query += ` and '${parentFolderId}' in parents`;
-  }
-  
-  const response = await drive.files.list({
-    q: query,
-    fields: 'files(id, name, webViewLink)',
-    spaces: 'drive'
+/** La nómina de salario los marca como descontados */
+const marcarLiquidados = (consecutivos, consecutivoNomina) =>
+  conCandado(CANDADO, async () => {
+    const { encabezados, prestamos } = await leerPrestamos();
+    for (const c of consecutivos) {
+      const p = prestamos.find((x) => x.consecutivo === String(c).trim().toUpperCase());
+      if (!p || p.estado_prestamo !== ESTADOS_PRESTAMO.DESEMBOLSADO) continue;
+      await actualizarCampos(
+        HOJA,
+        encabezados,
+        p._fila,
+        { estado_prestamo: ESTADOS_PRESTAMO.LIQUIDADO, consecutivo_nomina: consecutivoNomina, fecha_liquidacion: ahora() },
+        { omitirFaltantes: true }
+      );
+    }
   });
-  
-  return response.data.files.length > 0 ? response.data.files[0] : null;
-};
+
+// Compatibilidad con código anterior
+const marcarPrestamosLiquidados = (consecutivos) => marcarLiquidados(consecutivos, '');
 
 export const prestamoHelper = {
+  ESTADOS_PRESTAMO,
   getPrestamos,
-  guardarPrestamo,
-  getSiguienteConsecutivo,  
-  getPrestamoByConsecutivo,
-  getResumenPrestamosPorSolicitante,
-  getResumenPrestamosPorPropietario,
-  editarPrestamoporConsecutivo,
-  procesarArchivos,
-  subirArchivosACarpetaExistente,
-  marcarPrestamosLiquidados
+  listar,
+  obtener,
+  desembolsadosSinDescontar,
+  solicitar,
+  desembolsar,
+  rechazar,
+  marcarLiquidados,
+  marcarPrestamosLiquidados,
 };

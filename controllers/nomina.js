@@ -1,178 +1,118 @@
 import { nominaHelper } from '../helpers/nomina.js';
+import { firebaseHelper } from '../helpers/firebase.js';
+import { responderError } from '../helpers/errores.js';
 
-const ORDENAMIENTO_HANDLERS = {
-  valor: nominaHelper.getNominasOrdenadosPorValor,
-  viajes: nominaHelper.getNominasOrdenadosPorViajes,
+const peso = (n) => `$${Math.round(Number(n) || 0).toLocaleString('es-CO')}`;
+
+const avisarConductor = (email, titulo, mensaje, consecutivo) => {
+  firebaseHelper
+    .enviarNotificacion(email, titulo, mensaje, { tipo: 'nomina', consecutivo })
+    .catch((e) => console.warn('[nomina] Notificación no enviada:', e.message));
 };
 
-const FILTRO_HANDLERS = {
-    tipo: nominaHelper.getNominasPorTipo,
-    mes: nominaHelper.getNominaPorMes,
-};
-
-const TIPOS_ORDENAMIENTO = Object.keys(ORDENAMIENTO_HANDLERS);
-const TIPOS_FILTRO = Object.keys(FILTRO_HANDLERS);
+/** Lista de consecutivos que llega como 'V-1,V-2' o como arreglo */
+const lista = (valor) =>
+  (Array.isArray(valor) ? valor : String(valor ?? '').split(','))
+    .map((v) => String(v).trim())
+    .filter(Boolean);
 
 const httpNominas = {
-
-obtenerNomina: async (req, res) => {
+  /** Por liquidar, por conductor (cada perfil ve lo suyo) */
+  pendientes: async (req, res) => {
     try {
-      const data = await nominaHelper.getNominaConductores();
-      res.json(data);
+      res.json(await nominaHelper.pendientes(req.usuariobdtoken));
     } catch (error) {
-      console.error('Error al obtener datos:', error);
-      res.status(500).json({ mensaje: 'Error al obtener las nóminas' });
+      responderError(res, error, 'Error al consultar nómina pendiente');
     }
-},
+  },
 
-obtenerNominaPorConsecutivo: async (req, res) => {
-  try {
-    const { consecutivo } = req.params;
-    const nomina = await nominaHelper.getNominaByConsecutivo(consecutivo);
-
-    if (!nomina) {
-      return res.status(404).json({ mensaje: 'nómina no encontrada' });
+  /** Vista previa. ?tipo=viajes|salario&mes=AAAA-MM&viajes=V-1,V-2 */
+  calcularNomina: async (req, res) => {
+    try {
+      const { tipo = 'viajes', mes = '', viajes = '' } = req.query;
+      res.json(await nominaHelper.calcular(req.usuariobdtoken, req.params.email, { tipo, mes, viajes: lista(viajes) }));
+    } catch (error) {
+      responderError(res, error, 'Error al calcular nómina');
     }
+  },
 
-    res.json(nomina);
-  } catch (error) {
-    console.error('Error al obtener nómina:', error);
-    res.status(500).json({ mensaje: 'Error al obtener nómina' });
-  }
-},
-
-obtenerResumenNominaSolicitante: async (req, res) => {
-  try {
-    // const { email } = req.params;
-    const email = req.usuariobdtoken.email;
-    
-    if (!email) {
-      return res.status(400).json({
-        ok: false,
-        mensaje: 'Email es requerido'
+  /** Liquidar viajes (archivo opcional: comprobante) */
+  liquidarViajes: async (req, res) => {
+    try {
+      const r = await nominaHelper.liquidarViajes(
+        req.usuariobdtoken,
+        req.params.email,
+        { viajes: lista(req.body.viajes), notas: req.body.notas },
+        req.files || []
+      );
+      res.status(201).json({
+        mensaje: r.saldo_siguiente < 0
+          ? `Nómina ${r.consecutivo_nomina} registrada. Quedó un saldo de ${peso(-r.saldo_siguiente)} a descontar en la próxima.`
+          : `Nómina ${r.consecutivo_nomina} registrada. A pagar: ${peso(r.valor_pagado)}`,
+        nomina: r,
       });
+      avisarConductor(
+        r.id_conductor,
+        'Nómina de viajes liquidada',
+        `Se liquidaron ${r.total_viajes_mes} viaje(s). ${r.valor_pagado > 0 ? `Valor a recibir: ${peso(r.valor_pagado)}.` : `Queda debiendo ${peso(-r.saldo_siguiente)}.`}`,
+        r.consecutivo_nomina
+      );
+    } catch (error) {
+      responderError(res, error, 'Error al liquidar viajes');
     }
+  },
 
-    const resumen = await nominaHelper.getResumenNominaPorSolicitante(email);
-    
-    res.json({
-      ok: true,
-      resumen,
-      email,
-      mensaje: 'Resumen obtenido exitosamente'
-    });
-  } catch (error) {
-    console.error('Error al obtener resumen de nómina por email:', error);
-    res.status(500).json({
-      ok: false,
-      mensaje: 'Error interno del servidor',
-      error: error.message
-    });
-  }
-},
-
-obtenerNominaOrdenados: async (req, res) => {
-  try {
-    const { tipo = "tiempo", orden = "desc" } = req.query;
-    
-    if (orden !== "asc" && orden !== "desc") {
-      return res
-        .status(400)
-        .json({ mensaje: 'El parámetro orden debe ser "asc" o "desc"' });
+  /** Pagar salario del mes (archivo opcional: comprobante) */
+  pagarSalarioMensual: async (req, res) => {
+    try {
+      const r = await nominaHelper.pagarSalario(
+        req.usuariobdtoken,
+        req.params.email,
+        { mes: req.body.mes, notas: req.body.notas },
+        req.files || []
+      );
+      res.status(201).json({
+        mensaje: `Salario de ${r.mes} registrado (${r.consecutivo_nomina}). A pagar: ${peso(r.valor_pagado)}`,
+        nomina: r,
+      });
+      avisarConductor(
+        r.id_conductor,
+        `Salario de ${r.mes}`,
+        `Salario + seguridad social${r.total_prestamos ? ` menos préstamos (${peso(r.total_prestamos)})` : ''}: ${peso(r.valor_pagado)}.`,
+        r.consecutivo_nomina
+      );
+    } catch (error) {
+      responderError(res, error, 'Error al pagar salario');
     }
-    
-    const tipoLower = tipo.toLowerCase();
-    if (!TIPOS_ORDENAMIENTO.includes(tipoLower)) {
-      return res
-        .status(400)
-        .json({ 
-          mensaje: `El parámetro tipo debe ser uno de: ${TIPOS_ORDENAMIENTO.join(', ')}`,
-          tiposPermitidos: TIPOS_ORDENAMIENTO
-        });
+  },
+
+  /** Historial. ?tipo=viajes|salario&email= */
+  obtenerNomina: async (req, res) => {
+    try {
+      const { tipo = '', email = '' } = req.query;
+      res.json(await nominaHelper.historial(req.usuariobdtoken, { tipo, email }));
+    } catch (error) {
+      responderError(res, error, 'Error al obtener nóminas');
     }
-    
-    const handlerFn = ORDENAMIENTO_HANDLERS[tipoLower];
-    const nominas = await handlerFn(orden);
-    
-    res.json(nominas);
-  } catch (error) {
-    console.error("Error al obtener nominas ordenados:", error);
-    res.status(500).json({ mensaje: "Error al obtener nominas" });
-  }
-},
+  },
 
-obtenerNominaFiltrados: async (req, res) => {
-  try {
-    const { tipo, valor } = req.query;
-    
-    if (!tipo || !valor) {
-      return res
-        .status(400)
-        .json({ mensaje: 'Se requieren los parámetros tipo y valor' });
+  /** Compatibilidad: el conductor pide su historial */
+  obtenerResumenNominaSolicitante: async (req, res) => {
+    try {
+      const datos = await nominaHelper.historial(req.usuariobdtoken, { email: req.usuariobdtoken.email });
+      res.json({ ok: true, resumen: { total: { count: datos.length, consecutivos: datos } } });
+    } catch (error) {
+      responderError(res, error, 'Error al obtener nómina del conductor');
     }
-    
-    const tipoLower = tipo.toLowerCase();
-    if (!TIPOS_FILTRO.includes(tipoLower)) {
-      return res
-        .status(400)
-        .json({ 
-          mensaje: `El parámetro tipo debe ser uno de: ${TIPOS_FILTRO.join(', ')}`,
-          tiposPermitidos: TIPOS_FILTRO
-        });
+  },
+
+  obtenerNominaPorConsecutivo: async (req, res) => {
+    try {
+      res.json(await nominaHelper.obtener(req.usuariobdtoken, req.params.consecutivo));
+    } catch (error) {
+      responderError(res, error, 'Error al obtener nómina');
     }
-    
-    const handlerFn = FILTRO_HANDLERS[tipoLower];
-    const nominas = await handlerFn(valor);
-    
-    res.json(nominas);
-  } catch (error) {
-    console.error("Error al obtener nominas filtrados:", error);
-    res.status(500).json({ mensaje: "Error al obtener nominas", error: error.message });
-  }
-},
-
-calcularNomina: async (req, res) => {
-  try {
-    const { email } = req.params;
-    const { mes } = req.query; // ?mes=2026-01
-    const resultado = await nominaHelper.calcularNomina(email, mes);
-    res.status(200).json({ ok: true, resultado });
-  } catch (error) {
-    console.error('Error al calcular nómina:', error);
-    res.status(500).json({ mensaje: 'Error interno del servidor' });
-  }
-},
-
-aprobarNomina: async (req, res) => {
-  try {
-    const { email } = req.params;
-    const { mes } = req.body;
-    const resultado = await nominaHelper.aprobarNomina(email, mes);
-    res.status(200).json({ ok: true, mensaje: 'Nómina aprobada y liquidada', resultado });
-  } catch (error) {
-    console.error('Error al aprobar nómina:', error);
-    res.status(400).json({ 
-    ok: false,
-    mensaje: error.message 
-  });
-  }
-},
-
-pagarSalarioMensual: async (req, res) => {
-  try {
-    const { email } = req.params;
-    const { mes } = req.body; // "2025-01"
-    const resultado = await nominaHelper.pagarSalarioMensual(email, mes);
-    res.status(200).json({ ok: true, mensaje: 'Salario mensual pagado', resultado });
-  } catch (error) {
-    console.error('Error al pagar salario:', error);
-    res.status(400).json({ 
-    ok: false,
-    mensaje: error.message 
-  });
-  }
-},
-
-}
+  },
+};
 
 export default httpNominas;

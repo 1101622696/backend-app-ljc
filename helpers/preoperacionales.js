@@ -1,304 +1,204 @@
-import stream from 'stream';
-import { getDriveClient, getSheetsClient } from '../services/google.js';
+import { leerHoja, actualizarCampos, agregarFila, aNumero, siguienteConsecutivo, conCandado } from './hoja.js';
+import { obtenerCarpeta, subirArchivos, linkCarpeta } from './carpetas.js';
+import { ahora } from './fechas.js';
+import { ErrorApp } from './errores.js';
 
-const spreadsheetId = process.env.SPREADSHEET_ID;
-const carpetaPadreId = process.env.CARPETA_PADRE_ID_PREOPERACIONAL;
+// ─────────────────────────────────────────────────────────────
+// Hoja "Preoperacional" leída y escrita por NOMBRE de columna:
+//   consecutivo | codigo_viaje | placa | odometro | 42 ítems | correo_usuario | usuario | fecha_creacion | link
+// Los ítems se guardan tal como llegan ('Cumple' / 'No Cumple' / 'No aplica'): el frontend los compara así.
+// El consecutivo 'Pre-n' se genera y se guarda dentro de conCandado: dos envíos al tiempo no se repiten
+// y el nombre de la carpeta de Drive es el mismo consecutivo de la fila.
+// ─────────────────────────────────────────────────────────────
 
-const obtenerDatosPreoperacional = async () => {
-  const sheets = getSheetsClient();
-  
-  const range = 'Preoperacional!A1:AX1000'; 
+const HOJA = 'Preoperacional';
+const CANDADO = 'preoperacional';
+const PREFIJO = 'Pre';
 
-  const res = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range,
-  });
+export const ITEMS_PREOPERACIONAL = [
+  'nivel_agua', 'nivel_aceite', 'galones', 'fugas_visibles', 'presion_frenos', 'fugas_audibles', 'freno_parqueo',
+  'abs_sintestigo', 'prueba_freno', 'luces_altas_bajas', 'direccionales', 'luces_freno', 'luces_remolque',
+  'testigo_tablero', 'filtro_aire', 'volante', 'sin_fugas', 'cambios_suave', 'sin_ruidos', 'cinturon_seguridad',
+  'espejos', 'extintor_cabezote', 'extintor_trailer', 'botiquin', 'triangulos_reflectivos', 'kit_carretera',
+  'senalizacion_conduzco', 'correas', 'estado_carpa', 'refrigerante', 'pito', 'alarma_retroceso', 'presion_llantas',
+  'desgaste_llantas', 'tuercas_ajustadas', 'suspension_fisuras', 'acople_quintarueda', 'quinta_rueda', 'pasador_rey',
+  'mangueras_aire', 'seguro_acople', 'placas_visibles',
+];
 
-  const rows = res.data.values;
-  if (!rows || rows.length === 0) return [];
+const carpetaPadre = () => process.env.CARPETA_PADRE_ID_PREOPERACIONAL;
 
-  const headers = rows[0].map(h => h.trim().toLowerCase());
-  return rows.slice(1).map(row =>
-    Object.fromEntries(row.map((val, i) => [headers[i], val]))
-  );
+// ── Lectura ──
+
+const normalizarPlaca = (v) => String(v ?? '').replace(/\s+/g, '').toUpperCase();
+const numeroDe = (consecutivo) => parseInt(String(consecutivo ?? '').replace(/\D/g, ''), 10) || 0;
+const masRecientePrimero = (a, b) => numeroDe(b.consecutivo) - numeroDe(a.consecutivo);
+const valorItem = (v) => (typeof v === 'string' ? v.trim() : v ?? '');
+
+const normalizar = (fila) => ({
+  ...fila,
+  consecutivo: String(fila.consecutivo ?? '').trim(),
+  codigo_viaje: String(fila.codigo_viaje ?? '').trim().toUpperCase(),
+  placa: normalizarPlaca(fila.placa),
+  correo_usuario: String(fila.correo_usuario ?? '').trim().toLowerCase(),
+  // fecha_creacion se deja tal cual: lleva hora (se usa para medir km entre preoperacionales)
+});
+
+const sinFila = ({ _fila, ...resto }) => resto;
+
+async function leerPreoperacionales() {
+  const { encabezados, filas } = await leerHoja(HOJA);
+  return { encabezados, preoperacionales: filas.filter((f) => f.consecutivo).map(normalizar) };
+}
+
+/** Todos los preoperacionales, más reciente primero */
+const getPreoperacionales = async () => {
+  const { preoperacionales } = await leerPreoperacionales();
+  return preoperacionales.sort(masRecientePrimero).map(sinFila);
 };
 
-const getPreoperacionales = () => obtenerDatosPreoperacional();
-
+/** Solo informativo: el consecutivo real se asigna al guardar (dentro del candado) */
 const getSiguienteConsecutivo = async () => {
-  const preoperacionales = await getPreoperacionales();
-  
-  if (!preoperacionales.length) return "Pre-1";
-
-  const maxNumero = Math.max(
-    ...preoperacionales.map((p) => parseInt(p.consecutivo?.split('-')[1], 10) || 0)
-  );
-  
-  return `Pre-${maxNumero + 1}`;
+  const { preoperacionales } = await leerPreoperacionales();
+  return siguienteConsecutivo(preoperacionales, 'consecutivo', PREFIJO);
 };
 
-const guardarPreoperacional = async ({ codigo_viaje, placa, odometro, nivel_agua, nivel_aceite, galones, fugas_visibles, presion_frenos, fugas_audibles, freno_parqueo, abs_sintestigo, prueba_freno, luces_altas_bajas, direccionales, luces_freno, luces_remolque, testigo_tablero, filtro_aire, volante, sin_fugas, cambios_suave, sin_ruidos, cinturon_seguridad, espejos, extintor_cabezote, extintor_trailer, botiquin, triangulos_reflectivos, kit_carretera, senalizacion_conduzco, correas, estado_carpa, refrigerante, pito, alarma_retroceso, presion_llantas, desgaste_llantas, tuercas_ajustadas, suspension_fisuras, acople_quintarueda, quinta_rueda, pasador_rey, mangueras_aire, seguro_acople, placas_visibles, correo_usuario, usuario, fecha_creacion, Link }) => {
-  const sheets = getSheetsClient();
-  const consecutivo = await getSiguienteConsecutivo();
- 
-  const nuevaFila = [consecutivo, codigo_viaje, placa, odometro, nivel_agua, nivel_aceite, galones, fugas_visibles, presion_frenos, fugas_audibles, freno_parqueo, abs_sintestigo, prueba_freno, luces_altas_bajas, direccionales, luces_freno, luces_remolque, testigo_tablero, filtro_aire, volante, sin_fugas, cambios_suave, sin_ruidos, cinturon_seguridad, espejos, extintor_cabezote, extintor_trailer, botiquin, triangulos_reflectivos, kit_carretera, senalizacion_conduzco, correas, estado_carpa, refrigerante, pito, alarma_retroceso, presion_llantas, desgaste_llantas, tuercas_ajustadas, suspension_fisuras, acople_quintarueda, quinta_rueda, pasador_rey, mangueras_aire, seguro_acople, placas_visibles, correo_usuario, usuario, fecha_creacion, Link];
-
-  await sheets.spreadsheets.values.append({
-    spreadsheetId,
-    range: 'Preoperacional!A1',
-    valueInputOption: 'RAW',
-    insertDataOption: 'INSERT_ROWS',
-    requestBody: { values: [nuevaFila] },
-  });
-
-  return { consecutivo };
+const buscar = (preoperacionales, consecutivo) => {
+  const buscado = String(consecutivo ?? '').trim().toLowerCase();
+  return preoperacionales.find((p) => p.consecutivo.toLowerCase() === buscado) || null;
 };
 
 const getPreoperacionalesByConsecutivo = async (consecutivo) => {
-  const preoperacionales = await getPreoperacionales();
-  return preoperacionales.find(preoperacional => 
-    preoperacional.consecutivo && preoperacional.consecutivo.toLowerCase() === consecutivo.toLowerCase()
-  );
+  const { preoperacionales } = await leerPreoperacionales();
+  const encontrado = buscar(preoperacionales, consecutivo);
+  return encontrado ? sinFila(encontrado) : undefined;
 };
 
 const getResumenPreoperacionalesPorPlaca = async (placas) => {
-  try {
-    const todoslosPreoperacionales = await getPreoperacionales()
+  const lista = (Array.isArray(placas) ? placas : [placas]).map(normalizarPlaca).filter(Boolean);
+  const filtrados = (await getPreoperacionales()).filter((p) => lista.includes(p.placa));
 
-    // convertir a array si llega una sola placa
-    const placasArray = Array.isArray(placas)
-      ? placas
-      : [placas]
-
-    const placasUpper = placasArray.map(p =>
-      p.trim().toUpperCase()
-    )
-
-    const preoperacionalesFiltrados =
-      todoslosPreoperacionales.filter(p =>
-        placasUpper.includes(
-          p.placa?.trim().toUpperCase()
-        )
-      )
-
-    const mapConDatos = (lista) => {
-
-      return lista.map(r => ({
-
+  return {
+    total: {
+      count: filtrados.length,
+      consecutivos: filtrados.map((r) => ({
         consecutivo: r.consecutivo || '',
         codigo_viaje: r.codigo_viaje || '',
-        odometro: r.odometro || '',
+        odometro: r.odometro ?? '',
         fecha_creacion: r.fecha_creacion || '',
         correo_usuario: r.correo_usuario || '',
         usuario: r.usuario || '',
         placa: r.placa || '',
         link: r.link || '',
-
-      }))
-    }
-    return {
-      total: {
-        count: preoperacionalesFiltrados.length,
-        consecutivos: mapConDatos(preoperacionalesFiltrados)
-      }
-    }
-  } catch (error) {
-    console.error('Error al obtener resumen de preoperacionales por placa:', error);
-    throw error;
-  }
-};
-
-const editarPreoperacionalPorConsecutivo = async (consecutivo, nuevosDatos) => {
-  const sheets = getSheetsClient();
-
-  const response = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: 'Preoperacional!A2:AX1000', 
-  });
-
-  const filas = response.data.values;
-  const filaIndex = filas.findIndex(fila => fila[0]?.toLowerCase() === consecutivo.toLowerCase());
-
-  if (filaIndex === -1) {
-    return null; 
-  }
-
-  const filaActual = filas[filaIndex];
-  
-  const filaEditada = [
-    filaActual[0], 
-    filaActual[1], 
-    filaActual[2], 
-    filaActual[3], 
-    nuevosDatos.nivel_agua || filaActual[4], 
-    nuevosDatos.nivel_aceite || filaActual[5],
-    nuevosDatos.galones || filaActual[6], 
-    nuevosDatos.fugas_visibles || filaActual[7], 
-    nuevosDatos.presion_frenos || filaActual[8], 
-    nuevosDatos.fugas_audibles || filaActual[9], 
-    nuevosDatos.freno_parqueo || filaActual[10], 
-    nuevosDatos.abs_sintestigo || filaActual[11], 
-    nuevosDatos.prueba_freno || filaActual[12], 
-    nuevosDatos.luces_altas_bajas || filaActual[13], 
-    nuevosDatos.direccionales || filaActual[14], 
-    nuevosDatos.luces_freno || filaActual[15], 
-    nuevosDatos.luces_remolque || filaActual[16], 
-    nuevosDatos.testigo_tablero || filaActual[17], 
-    nuevosDatos.filtro_aire || filaActual[18],
-    nuevosDatos.volante || filaActual[19], 
-    nuevosDatos.sin_fugas || filaActual[20], 
-    nuevosDatos.cambios_suave || filaActual[21], 
-    nuevosDatos.sin_ruidos || filaActual[22], 
-    nuevosDatos.cinturon_seguridad || filaActual[23], 
-    nuevosDatos.espejos || filaActual[24], 
-    nuevosDatos.extintor_cabezote || filaActual[25], 
-    nuevosDatos.extintor_trailer || filaActual[26], 
-    nuevosDatos.botiquin || filaActual[27], 
-    nuevosDatos.triangulos_reflectivos || filaActual[28], 
-    nuevosDatos.kit_carretera || filaActual[29], 
-    nuevosDatos.senalizacion_conduzco || filaActual[30], 
-    nuevosDatos.correas || filaActual[31], 
-    nuevosDatos.estado_carpa || filaActual[32], 
-    nuevosDatos.refrigerante || filaActual[33], 
-    nuevosDatos.pito || filaActual[34], 
-    nuevosDatos.alarma_retroceso || filaActual[35], 
-    nuevosDatos.presion_llantas || filaActual[36], 
-    nuevosDatos.desgaste_llantas || filaActual[37],
-    nuevosDatos.tuercas_ajustadas || filaActual[38], 
-    nuevosDatos.suspension_fisuras || filaActual[39], 
-    nuevosDatos.acople_quintarueda || filaActual[40], 
-    nuevosDatos.quinta_rueda || filaActual[41], 
-    nuevosDatos.pasador_rey || filaActual[42], 
-    nuevosDatos.mangueras_aire || filaActual[43], 
-    nuevosDatos.seguro_acople || filaActual[44], 
-    nuevosDatos.placas_visibles || filaActual[45], 
-    filaActual[46],  
-    filaActual[47],  
-    filaActual[48],  
-    nuevosDatos.link || filaActual[49], 
-  ];
-
-  const filaEnHoja = filaIndex + 2; 
-
-  await sheets.spreadsheets.values.update({
-    spreadsheetId,
-    range: `Preoperacional!A${filaEnHoja}:AX${filaEnHoja}`,
-    valueInputOption: 'RAW',
-    requestBody: {
-      values: [filaEditada],
+      })),
     },
-  });
-
-  return true;
+  };
 };
 
-const crearCarpeta = async (nombreCarpeta, parentFolderId) => {
-  const drive = getDriveClient();
-  
-  const fileMetadata = {
-    name: nombreCarpeta,
-    mimeType: 'application/vnd.google-apps.folder',
-    parents: parentFolderId ? [parentFolderId] : []
+// ── Escritura ──
+
+/** Arma la fila (por nombre de columna) a partir del objeto que envía el controlador */
+const armarFila = (consecutivo, datos, link) => {
+  const placa = normalizarPlaca(datos.placa);
+  if (!placa) throw new ErrorApp(400, 'Falta la placa del preoperacional');
+  const odometro = Math.round(aNumero(datos.odometro));
+  if (odometro < 0) throw new ErrorApp(400, 'El odómetro no puede ser negativo');
+
+  return {
+    consecutivo,
+    codigo_viaje: String(datos.codigo_viaje ?? '').trim().toUpperCase(),
+    placa,
+    odometro: odometro || '',
+    ...Object.fromEntries(ITEMS_PREOPERACIONAL.map((campo) => [campo, valorItem(datos[campo])])),
+    correo_usuario: String(datos.correo_usuario ?? '').trim().toLowerCase(),
+    usuario: String(datos.usuario ?? '').trim(),
+    fecha_creacion: datos.fecha_creacion || ahora(),
+    link: link || '',
   };
-  
-  const respuesta = await drive.files.create({
-    resource: fileMetadata,
-    fields: 'id, webViewLink'
-  });
-  
-  return respuesta.data;
 };
 
-const subirArchivo = async (archivo, carpetaId) => {
-  const drive = getDriveClient();
-  
-  const fileMetadata = {
-    name: archivo.originalname,
-    parents: [carpetaId]
-  };
-  
-  const bufferStream = new stream.PassThrough();
-  bufferStream.end(archivo.buffer);
-  
-  const media = {
-    mimeType: archivo.mimetype,
-    body: bufferStream
-  };
-  
-  const respuesta = await drive.files.create({
-    resource: fileMetadata,
-    media: media,
-    fields: 'id, webViewLink'
+/**
+ * Crea consecutivo + carpeta de Drive + archivos + fila en UNA sola operación con candado.
+ * Si la subida falla no queda fila a medias. Devuelve { consecutivo, link }.
+ */
+const guardarConArchivos = (datos, archivos = []) =>
+  conCandado(CANDADO, async () => {
+    const { encabezados, preoperacionales } = await leerPreoperacionales();
+    const consecutivo = siguienteConsecutivo(preoperacionales, 'consecutivo', PREFIJO);
+
+    let link = datos.link || datos.Link || '';
+    if (archivos?.length) {
+      const carpeta = await obtenerCarpeta(consecutivo, carpetaPadre());
+      await subirArchivos(archivos, carpeta.id);
+      link = carpeta.link;
+    }
+
+    await agregarFila(HOJA, encabezados, armarFila(consecutivo, datos, link));
+    return { consecutivo, link };
   });
-  
-  return respuesta.data.webViewLink;
+
+/** Igual que antes: recibe el mismo objeto (con Link o link) y devuelve { consecutivo } */
+const guardarPreoperacional = async (datos) => {
+  const { consecutivo } = await guardarConArchivos(datos, []);
+  return { consecutivo };
 };
 
+/**
+ * Edita SOLO los campos enviados (los ítems pueden quedar vacíos si así se envían).
+ * consecutivo, viaje, placa, odómetro, usuario y fecha no se editan.
+ * Devuelve null si no existe.
+ */
+const editarPreoperacionalPorConsecutivo = (consecutivo, nuevosDatos = {}) =>
+  conCandado(CANDADO, async () => {
+    const { encabezados, preoperacionales } = await leerPreoperacionales();
+    const actual = buscar(preoperacionales, consecutivo);
+    if (!actual) return null;
+
+    const cambios = {};
+    for (const campo of ITEMS_PREOPERACIONAL) {
+      if (nuevosDatos[campo] !== undefined) cambios[campo] = valorItem(nuevosDatos[campo]);
+    }
+    // El controlador antes enviaba "Link" y el helper leía "link": el link nuevo nunca se guardaba
+    const link = nuevosDatos.link ?? nuevosDatos.Link;
+    if (link) cambios.link = link;
+
+    if (Object.keys(cambios).length) {
+      await actualizarCampos(HOJA, encabezados, actual._fila, cambios, { omitirFaltantes: true });
+    }
+    return true;
+  });
+
+// ── Drive ──
+
+/** Sube archivos a la carpeta del preoperacional (la crea si no existe). Devuelve el link de la carpeta */
 const procesarArchivos = async (archivos, consecutivo) => {
-  if (!archivos || archivos.length === 0) {
-    return null;
-  }
-    
-  let carpeta = await buscarCarpetaPorNombre(consecutivo, carpetaPadreId);
-  
-  if (!carpeta) {
-    carpeta = await crearCarpeta(consecutivo, carpetaPadreId);
-  }
-  
-  const enlaces = [];
-  for (const archivo of archivos) {
-    const enlace = await subirArchivo(archivo, carpeta.id);
-    enlaces.push(enlace);
-  }
-  
-  return carpeta.webViewLink;
+  if (!archivos?.length) return null;
+  const carpeta = await obtenerCarpeta(String(consecutivo).trim(), carpetaPadre());
+  await subirArchivos(archivos, carpeta.id);
+  return carpeta.link;
 };
 
 const subirArchivosACarpetaExistente = async (archivos, carpetaId) => {
-  if (!archivos || archivos.length === 0) {
-    return null;
-  }
-  
-  const enlaces = [];
-  for (const archivo of archivos) {
-    const enlace = await subirArchivo(archivo, carpetaId);
-    enlaces.push(enlace);
-  }
-  
-  const drive = getDriveClient();
-  const carpeta = await drive.files.get({
-    fileId: carpetaId,
-    fields: 'webViewLink'
-  });
-  
-  return carpeta.data.webViewLink;
+  if (!archivos?.length) return null;
+  await subirArchivos(archivos, carpetaId);
+  return linkCarpeta(carpetaId);
 };
 
-const buscarCarpetaPorNombre = async (nombreCarpeta, parentFolderId) => {
-  const drive = getDriveClient();
-  
-  let query = `name = '${nombreCarpeta}' and mimeType = 'application/vnd.google-apps.folder'`;
-  if (parentFolderId) {
-    query += ` and '${parentFolderId}' in parents`;
-  }
-  
-  const response = await drive.files.list({
-    q: query,
-    fields: 'files(id, name, webViewLink)',
-    spaces: 'drive'
-  });
-  
-  return response.data.files.length > 0 ? response.data.files[0] : null;
+/** Compatibilidad: devuelve la carpeta del consecutivo ({ id, webViewLink }); la crea si no existe */
+const buscarCarpetaPorNombre = async (nombreCarpeta, parentFolderId = carpetaPadre()) => {
+  const carpeta = await obtenerCarpeta(nombreCarpeta, parentFolderId);
+  return { id: carpeta.id, name: nombreCarpeta, webViewLink: carpeta.link };
 };
 
 export const preoperacionalHelper = {
   getPreoperacionales,
   guardarPreoperacional,
-  getSiguienteConsecutivo,  
+  guardarConArchivos,
+  getSiguienteConsecutivo,
   getPreoperacionalesByConsecutivo,
   getResumenPreoperacionalesPorPlaca,
   editarPreoperacionalPorConsecutivo,
   procesarArchivos,
   subirArchivosACarpetaExistente,
-  buscarCarpetaPorNombre
+  buscarCarpetaPorNombre,
+  ITEMS: ITEMS_PREOPERACIONAL,
 };

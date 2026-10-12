@@ -1,1099 +1,902 @@
-import stream from 'stream';
-import { getDriveClient, getSheetsClient } from '../services/google.js';
-import { clienteHelper } from '../helpers/clientes.js';
-import { gastosVehiculoHelper } from '../helpers/gastos.js';
-import { detalleGastosViajesHelper } from '../helpers/detalles_gastos.js';
-import { get } from 'http';
+import { leerHoja, actualizarCampos, agregarFila, aNumero, siguienteConsecutivo, conCandado } from './hoja.js';
+import { obtenerCarpeta, subirArchivos } from './carpetas.js';
+import { clienteHelper } from './clientes.js';
+import { vehiculoHelper } from './vehiculos.js';
+import { usuarioHelper } from './usuarios.js';
+import { detalleGastosViajesHelper as detalle } from './detalles_gastos.js';
+import { ahora, hoy, aFechaISO, parsearFecha } from './fechas.js';
+import { ErrorApp } from './errores.js';
+import {
+  ESTADOS,
+  ESTADOS_ABIERTOS,
+  ESTADOS_LIQUIDABLES,
+  PREOPERACIONAL,
+  TIPOS_GASTO,
+  ETIQUETAS_GASTO,
+  requiereSoporte,
+  normalizarKilos,
+  validarPrecioTonelada,
+  validarDescargue,
+  calcularViaje,
+} from './calculos_viaje.js';
 
-const spreadsheetId = process.env.SPREADSHEET_ID;
+// ─────────────────────────────────────────────────────────────
+// Hoja "Viajes" leída y escrita por NOMBRE de columna.
+// Flujo: solicitado → anticipo_consignado → (preoperacional) → completado → aprobado → facturado → pagado
+// Toda escritura pasa por conCandado('viajes'): un doble toque no cierra/aprueba dos veces.
+// ─────────────────────────────────────────────────────────────
+
+const HOJA = 'Viajes';
+const CANDADO = 'viajes';
 const carpetaPadreId = process.env.CARPETA_PADRE_ID_VIAJES;
 
-const obtenerDatosViaje = async (nombreHoja, rango = 'A1:AN1000') => {
-  const sheets = getSheetsClient();
-  const res = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: `${nombreHoja}!${rango}`,
-  });
+const PERFIL = { ADMIN: 'administrador', PROPIETARIO: 'propietario', CONDUCTOR: 'conductor' };
 
-  const rows = res.data.values;
-  if (!rows || rows.length === 0) return [];
+// Lo que el conductor no ve del viaje (finanzas del propietario y del cliente)
+const CAMPOS_SOLO_GESTION = [
+  'total_gastos_propietario', 'ganancia_viaje_estimada', 'ganancia_viaje_real', 'link_gastos_propietario',
+  'valor_anticipo_cliente', 'descuento_rete_fuente', 'descuento_rete_ica', 'total_descuentos_cliente',
+  'saldo_pendiente_cliente_sin_descuento', 'saldo_pendiente_cliente_real', 'estado_saldo_cliente',
+  'diferencia_precio', 'valor_merma', 'diferencia_facturacion', 'notas_facturacion',
+];
 
-  const headers = rows[0].map(h => h.trim().toLowerCase());
-  return rows.slice(1).map(row =>
-    Object.fromEntries(row.map((val, i) => [headers[i], val]))
-  );
+// ── Lectura ──
+
+const textoMinuscula = (v) => String(v ?? '').trim().toLowerCase();
+
+const normalizar = (fila) => ({
+  ...fila,
+  consecutivo: String(fila.consecutivo ?? '').trim().toUpperCase(),
+  placa: String(fila.placa ?? '').trim().toUpperCase(),
+  cliente: String(fila.cliente ?? '').trim(),
+  correo_usuario: textoMinuscula(fila.correo_usuario),
+  estado_viaje: textoMinuscula(fila.estado_viaje),
+  estado_preoperacional: textoMinuscula(fila.estado_preoperacional) || PREOPERACIONAL.PENDIENTE,
+  estado_saldo_cliente: textoMinuscula(fila.estado_saldo_cliente) || 'pendiente',
+  liquidado: textoMinuscula(fila.liquidado) || 'no',
+  fecha_inicio: aFechaISO(fila.fecha_inicio) || String(fila.fecha_inicio ?? ''),
+  fecha_fin_viaje: aFechaISO(fila.fecha_fin_viaje) || String(fila.fecha_fin_viaje ?? ''),
+});
+
+const numero = (consecutivo) => parseInt(String(consecutivo).replace(/\D/g, ''), 10) || 0;
+const masRecientePrimero = (a, b) => numero(b.consecutivo) - numero(a.consecutivo);
+
+async function leerViajes() {
+  const { encabezados, filas } = await leerHoja(HOJA);
+  const viajes = filas.filter((f) => f.consecutivo).map(normalizar);
+  return { encabezados, viajes };
+}
+
+/** Todos los viajes (uso interno: nómina, alertas, resumen). Más reciente primero */
+const getTodosLosViajes = async () => {
+  const { viajes } = await leerViajes();
+  return viajes.sort(masRecientePrimero).map(({ _fila, ...v }) => v);
 };
 
-const getViajes = async (pagina = 1, limite = 50) => {
-  const sheets = getSheetsClient()
-  const inicio = (pagina - 1) * limite + 2
-  const fin = inicio + limite - 1
-
-  const resHeaders = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: 'Viajes!A1:AN1',
-  })
-  const headers = (resHeaders.data.values?.[0] || []).map(h => h.trim().toLowerCase())
-
-  const resData = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: `Viajes!A${inicio}:AN${fin}`,
-  })
-
-  const rows = resData.data.values || []
-  const datos = rows
-    .map(row => Object.fromEntries(headers.map((h, i) => [h, row[i] ?? ''])))
-    .sort((a, b) => {
-      const numA = parseInt(a.consecutivo?.replace(/\D/g, ''), 10) || 0
-      const numB = parseInt(b.consecutivo?.replace(/\D/g, ''), 10) || 0
-      return numB - numA
-    })
-
-  return { datos, pagina, limite, hayMas: rows.length === limite }
+async function buscarViaje(consecutivo) {
+  const { encabezados, viajes } = await leerViajes();
+  const buscado = String(consecutivo ?? '').trim().toUpperCase();
+  const viaje = viajes.find((v) => v.consecutivo === buscado);
+  if (!viaje) throw new ErrorApp(404, `No existe el viaje ${buscado}`);
+  return { encabezados, viaje, viajes };
 }
 
-const getTodosLosViajes = async () => {
-  const sheets = getSheetsClient()
-  const res = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: 'Viajes!A1:AN1000',
-  })
-  const rows = res.data.values || []
-  if (rows.length === 0) return []
-  const headers = rows[0].map(h => h.trim().toLowerCase())
-  return rows.slice(1).map(row =>
-    Object.fromEntries(headers.map((h, i) => [h, row[i] ?? '']))
-  )
+async function escribir(encabezados, viaje, cambios) {
+  await actualizarCampos(HOJA, encabezados, viaje._fila, cambios, { omitirFaltantes: true });
+  Object.assign(viaje, cambios);
 }
 
-const getResumenViajesPorPlaca = async (placas) => {
-  try {
-   
-    const todoslosViajes = await getTodosLosViajes()
+// ── Permisos ──
 
-    const placasArray = Array.isArray(placas)
-      ? placas
-      : [placas]
+const placasDe = (usuario) => usuarioHelper.listaPlacas(usuario?.placa_asignada);
+const esAdmin = (usuario) => usuario?.perfil === PERFIL.ADMIN;
+const esGestion = (usuario) => [PERFIL.ADMIN, PERFIL.PROPIETARIO].includes(usuario?.perfil);
 
-    const placasUpper = placasArray.map(p =>p.trim().toUpperCase())
+const puedeVerViaje = (usuario, viaje) => esAdmin(usuario) || placasDe(usuario).includes(viaje.placa);
 
-    const viajesFiltrados = todoslosViajes.filter(p => placasUpper.includes(p.placa?.trim().toUpperCase()))
+function exigirAcceso(usuario, viaje) {
+  if (!puedeVerViaje(usuario, viaje)) throw new ErrorApp(404, `No existe el viaje ${viaje.consecutivo}`);
+}
 
-    const mapConDatos = (lista) => {
+function exigirGestion(usuario, viaje) {
+  exigirAcceso(usuario, viaje);
+  if (!esGestion(usuario)) throw new ErrorApp(403, 'Solo el propietario o el administrador pueden hacer esto');
+}
 
-      return lista.map(r => ({
+/** Lo que se le muestra a cada perfil */
+const vistaPara = (usuario, viaje) => {
+  const { _fila, ...copia } = viaje;
+  if (usuario?.perfil === PERFIL.CONDUCTOR) CAMPOS_SOLO_GESTION.forEach((c) => delete copia[c]);
+  return copia;
+};
 
-        consecutivo: r.consecutivo || '',
-        placa: r.placa || '',
-        cliente: r.cliente || '',
-        destino: r.destino || '',
-        fecha_inicio: r.fecha_inicio || '',
-        estado_viaje: r.estado_viaje || '',
-        estado_preoperacional: r.estado_preoperacional || '',
+const NOMBRES_ESTADO = {
+  [ESTADOS.SOLICITADO]: 'solicitado (falta consignar el anticipo)',
+  [ESTADOS.CONSIGNADO]: 'con anticipo consignado',
+  [ESTADOS.COMPLETADO]: 'cerrado por el conductor (pendiente de aprobar)',
+  [ESTADOS.APROBADO]: 'aprobado',
+  [ESTADOS.FACTURADO]: 'facturado',
+  [ESTADOS.PAGADO]: 'pagado por el cliente',
+};
 
-      }))
-    }
-    return {
-      total: {
-        count: viajesFiltrados.length,
-        consecutivos: mapConDatos(viajesFiltrados)
-      }
-    }
-  } catch (error) {
-    console.error('Error al obtener resumen de viajes por placa:', error);
-    throw error;
+function exigirEstado(viaje, ...permitidos) {
+  if (!permitidos.includes(viaje.estado_viaje)) {
+    throw new ErrorApp(409, `El viaje ${viaje.consecutivo} está ${NOMBRES_ESTADO[viaje.estado_viaje] || viaje.estado_viaje}. Esta acción no aplica.`);
   }
+}
+
+// ── Datos relacionados ──
+
+async function buscarCliente(codigo) {
+  const clientes = await clienteHelper.getClientes();
+  return clientes.find((c) => String(c.codigo ?? '').trim().toLowerCase() === String(codigo ?? '').trim().toLowerCase()) || null;
+}
+
+async function nombresClientes() {
+  const clientes = await clienteHelper.getClientes();
+  return Object.fromEntries(clientes.map((c) => [String(c.codigo ?? '').trim(), c.empresa || '']));
+}
+
+async function capacidadDe(placa) {
+  const vehiculo = await vehiculoHelper.getVehiculoById(placa);
+  return aNumero(vehiculo?.capacidad_ton);
+}
+
+// ── Archivos ──
+
+/** Agrupa req.files (upload.any) por nombre de campo */
+export const agruparArchivos = (files = []) =>
+  files.reduce((grupos, archivo) => {
+    (grupos[archivo.fieldname] ||= []).push(archivo);
+    return grupos;
+  }, {});
+
+async function carpetaViaje(consecutivo, subcarpeta = null) {
+  const carpeta = await obtenerCarpeta(consecutivo, carpetaPadreId);
+  if (!subcarpeta) return carpeta;
+  return obtenerCarpeta(subcarpeta, carpeta.id);
+}
+
+// ── Gastos que vienen del formulario ──
+
+/**
+ * Lee del formulario los gastos de 'conductor' o 'propietario'.
+ * Campos: {tipo}_{quien} (valor), tipo_factura_{tipo}_{quien}, descripcion_{tipo}_{quien},
+ *         archivos en {tipo}_{quien}_archivos
+ * Solo devuelve los tipos que vinieron en el formulario.
+ */
+function leerGastosFormulario(datos, archivos, quien) {
+  return TIPOS_GASTO.filter((tipo) => datos[`${tipo}_${quien}`] !== undefined).map((tipo) => {
+    const valor = Math.round(aNumero(datos[`${tipo}_${quien}`]));
+    if (valor < 0) throw new ErrorApp(400, `El valor de ${ETIQUETAS_GASTO[tipo]} no puede ser negativo`);
+    return {
+      tipo,
+      valor,
+      tipo_factura: datos[`tipo_factura_${tipo}_${quien}`],
+      descripcion: String(datos[`descripcion_${tipo}_${quien}`] ?? '').trim(),
+      archivos: archivos[`${tipo}_${quien}_archivos`] || [],
+    };
+  });
+}
+
+/**
+ * Valida soportes y descripción. exigirSoporte=false cuando el propietario corrige al aprobar.
+ * existentes: gastos ya guardados de ese quien (si ya tiene soporte no se vuelve a pedir).
+ */
+function validarGastos(gastos, quien, existentes = {}, exigirSoporte = true) {
+  for (const g of gastos) {
+    if (g.valor <= 0) continue;
+    const etiqueta = ETIQUETAS_GASTO[g.tipo];
+    if (g.tipo === 'otro' && !g.descripcion && !existentes.otro?.descripcion) {
+      throw new ErrorApp(400, `Describa en qué fue el gasto "Otro" (${quien})`);
+    }
+    if (exigirSoporte && requiereSoporte(g.tipo, quien) && !g.archivos.length && !existentes[g.tipo]?.link_soporte) {
+      throw new ErrorApp(400, `Adjunte el soporte de ${etiqueta} (${quien})`);
+    }
+  }
+}
+
+/** Sube los soportes y guarda en Detalle_Gastos_Viajes. Devuelve { total, link } */
+async function guardarGastosConSoportes(consecutivo, quien, gastos) {
+  const conArchivos = gastos.filter((g) => g.archivos.length);
+  let link = '';
+  if (conArchivos.length) {
+    const carpeta = await carpetaViaje(consecutivo, quien === 'conductor' ? 'Gastos_Conductor' : 'Gastos_Propietario');
+    link = carpeta.link;
+    for (const g of conArchivos) {
+      await subirArchivos(g.archivos, carpeta.id, `${ETIQUETAS_GASTO[g.tipo]} - `);
+      g.link = carpeta.link;
+    }
+  }
+  const total = await detalle.guardarGastos(consecutivo, quien, gastos);
+  return { total, link };
+}
+
+// ── Gasto del viaje en Gastos_Vehiculos (uno por viaje, se actualiza si cambia) ──
+
+async function registrarGastoVehiculo(viaje) {
+  const HOJA_GASTOS = 'Gastos_Vehiculos';
+  const { encabezados, filas } = await leerHoja(HOJA_GASTOS);
+  const valor = aNumero(viaje.total_gastos_conductor) + aNumero(viaje.total_gastos_propietario);
+  const existente = filas.find(
+    (f) => textoMinuscula(f.tipo_gasto) === 'viaje' && String(f.codigo_referencia).trim().toUpperCase() === viaje.consecutivo
+  );
+  const descripcion = `Gastos del viaje ${viaje.consecutivo} (conductor + propietario)`;
+
+  if (existente) {
+    await actualizarCampos(HOJA_GASTOS, encabezados, existente._fila, { valor_gasto: valor, descripcion }, { omitirFaltantes: true });
+  } else {
+    await agregarFila(HOJA_GASTOS, encabezados, {
+      consecutivo: siguienteConsecutivo(filas, 'consecutivo', 'G'),
+      fecha_registro: viaje.fecha_fin_viaje || hoy(),
+      placa: viaje.placa,
+      tipo_gasto: 'viaje',
+      codigo_referencia: viaje.consecutivo,
+      valor_gasto: valor,
+      descripcion,
+      link_soporte: viaje.link_carpeta || '',
+    });
+  }
+}
+
+// ── Contadores de viajes (cliente, vehículo, conductor). Se suman una sola vez, al aprobar ──
+
+async function sumarContador(hoja, campoLlave, valorLlave, campoContador) {
+  try {
+    const { encabezados, filas } = await leerHoja(hoja);
+    const fila = filas.find((f) => String(f[campoLlave] ?? '').trim().toLowerCase() === String(valorLlave).trim().toLowerCase());
+    if (!fila) return;
+    await actualizarCampos(hoja, encabezados, fila._fila, { [campoContador]: aNumero(fila[campoContador]) + 1 }, { omitirFaltantes: true });
+  } catch (error) {
+    console.warn(`[viajes] No se pudo actualizar el contador en ${hoja}:`, error.message);
+  }
+}
+
+async function sumarContadores(viaje) {
+  await sumarContador('Clientes', 'codigo', viaje.cliente, 'viajes');
+  await sumarContador('Vehiculos', 'placa', viaje.placa, 'viajes');
+  await sumarContador('Usuarios', 'email', viaje.correo_usuario, 'viajes_realizados');
+  usuarioHelper.invalidarCache();
+}
+
+// ─────────────────────────────────────────────────────────────
+// 1. SOLICITAR ANTICIPO (crear viaje)
+// ─────────────────────────────────────────────────────────────
+
+async function resolverPlacaYConductor(usuario, datos) {
+  const placaPedida = String(datos.placa ?? '').trim().toUpperCase();
+  let placa;
+  let conductor;
+
+  if (usuario.perfil === PERFIL.CONDUCTOR) {
+    const mias = placasDe(usuario);
+    if (!mias.length) throw new ErrorApp(400, 'No tiene una placa asignada. Comuníquese con el administrador.');
+    if (mias.length > 1 && !placaPedida) throw new ErrorApp(400, 'Seleccione la placa del viaje');
+    placa = placaPedida || mias[0];
+    if (!mias.includes(placa)) throw new ErrorApp(403, `La placa ${placa} no está asignada a usted`);
+    conductor = await usuarioHelper.getUsuarioByEmail(usuario.email);
+  } else {
+    if (!placaPedida) throw new ErrorApp(400, 'Seleccione la placa del viaje');
+    if (!esAdmin(usuario) && !placasDe(usuario).includes(placaPedida)) {
+      throw new ErrorApp(403, `La placa ${placaPedida} no es suya`);
+    }
+    placa = placaPedida;
+
+    // El viaje es del conductor (para su nómina), no de quien lo registra
+    const conductores = (await usuarioHelper.getUsuarios()).filter(
+      (u) => u.perfil === PERFIL.CONDUCTOR && u.estado === 'activo' && usuarioHelper.placasDe(u).includes(placa)
+    );
+    const correoPedido = usuarioHelper.normalizarEmail(datos.correo_conductor);
+    if (correoPedido) {
+      conductor = conductores.find((c) => c.email === correoPedido);
+      if (!conductor) throw new ErrorApp(400, `El conductor seleccionado no tiene asignada la placa ${placa}`);
+    } else if (conductores.length === 1) {
+      conductor = conductores[0];
+    } else if (!conductores.length) {
+      throw new ErrorApp(400, `La placa ${placa} no tiene un conductor activo asignado`);
+    } else {
+      throw new ErrorApp(400, `La placa ${placa} tiene varios conductores. Seleccione cuál hace el viaje.`);
+    }
+  }
+
+  return { placa, conductor };
+}
+
+const crearViaje = (usuario, datos) =>
+  conCandado(CANDADO, async () => {
+    const { placa, conductor } = await resolverPlacaYConductor(usuario, datos);
+
+    const vehiculo = await vehiculoHelper.getVehiculoById(placa);
+    if (!vehiculo) throw new ErrorApp(404, `No existe el vehículo ${placa}`);
+    if (textoMinuscula(vehiculo.estado) === 'inactivo') throw new ErrorApp(400, `El vehículo ${placa} está inactivo`);
+
+    const cliente = await buscarCliente(datos.cliente);
+    if (!cliente) throw new ErrorApp(400, 'Seleccione un cliente válido');
+    if (textoMinuscula(cliente.estado) === 'inactivo') throw new ErrorApp(400, `El cliente ${cliente.empresa} está inactivo`);
+
+    const destino = String(datos.destino ?? '').trim();
+    if (!destino) throw new ErrorApp(400, 'Ingrese el destino');
+
+    const fechaInicio = aFechaISO(datos.fecha_inicio);
+    if (!fechaInicio) throw new ErrorApp(400, 'Ingrese la fecha de inicio del viaje');
+
+    const anticipo = Math.round(aNumero(datos.valor_anticipo_conductor));
+    if (anticipo <= 0) throw new ErrorApp(400, 'Ingrese el valor del anticipo');
+
+    const precioInicial = validarPrecioTonelada(datos.valor_tonelada_inicial, 'valor de la tonelada inicial');
+
+    const { encabezados, viajes } = await leerViajes();
+
+    const abierto = viajes.find((v) => v.placa === placa && ESTADOS_ABIERTOS.includes(v.estado_viaje));
+    if (abierto) {
+      throw new ErrorApp(
+        409,
+        `La placa ${placa} ya tiene el viaje ${abierto.consecutivo} abierto (${NOMBRES_ESTADO[abierto.estado_viaje]}). Ciérrelo antes de pedir otro anticipo.`
+      );
+    }
+
+    const consecutivo = siguienteConsecutivo(viajes, 'consecutivo', 'V');
+    const nuevo = {
+      consecutivo,
+      placa,
+      cliente: String(cliente.codigo).trim(),
+      destino,
+      fecha_inicio: fechaInicio,
+      correo_usuario: conductor.email,
+      usuario: conductor.nombre,
+      creado_por: usuario.email,
+      fecha_creacion: ahora(),
+      estado_viaje: ESTADOS.SOLICITADO,
+      estado_preoperacional: PREOPERACIONAL.PENDIENTE,
+      valor_anticipo_conductor: anticipo,
+      valor_tonelada_inicial: precioInicial,
+      estado_saldo_cliente: 'pendiente',
+      ajuste_diez_pcto_pendiente: 0,
+      liquidado: 'no',
+    };
+
+    await agregarFila(HOJA, encabezados, nuevo);
+    return { ...nuevo, cliente_nombre: cliente.empresa };
+  });
+
+// ─────────────────────────────────────────────────────────────
+// 2. CONSIGNAR ANTICIPO (propietario / admin)
+// ─────────────────────────────────────────────────────────────
+
+const consignarAnticipo = (usuario, consecutivo, datos, archivos) =>
+  conCandado(CANDADO, async () => {
+    const { encabezados, viaje } = await buscarViaje(consecutivo);
+    exigirGestion(usuario, viaje);
+    exigirEstado(viaje, ESTADOS.SOLICITADO);
+
+    const valor = Math.round(aNumero(datos.valor_anticipo_consignado));
+    if (valor <= 0) throw new ErrorApp(400, 'Ingrese el valor consignado');
+
+    const comprobantes = archivos.comprobante || [];
+    if (!comprobantes.length) throw new ErrorApp(400, 'Adjunte el comprobante de la consignación');
+
+    const carpeta = await carpetaViaje(viaje.consecutivo, 'Consignacion');
+    await subirArchivos(comprobantes, carpeta.id, 'Consignación - ');
+    const raiz = await carpetaViaje(viaje.consecutivo);
+
+    await escribir(encabezados, viaje, {
+      valor_anticipo_consignado: valor,
+      fecha_consignacion: aFechaISO(datos.fecha_consignacion) || hoy(),
+      link_consignacion: carpeta.link,
+      consignado_por: usuario.email,
+      link_carpeta: raiz.link,
+      estado_viaje: ESTADOS.CONSIGNADO,
+    });
+    return viaje;
+  });
+
+// ─────────────────────────────────────────────────────────────
+// 3. PREOPERACIONAL (lo llama el módulo de preoperacionales)
+// ─────────────────────────────────────────────────────────────
+
+/** Valida que el viaje pueda recibir el preoperacional y devuelve el viaje */
+const validarViajeParaPreoperacional = async (usuario, consecutivo) => {
+  const { viaje } = await buscarViaje(consecutivo);
+  exigirAcceso(usuario, viaje);
+  exigirEstado(viaje, ESTADOS.SOLICITADO, ESTADOS.CONSIGNADO);
+  if (viaje.estado_preoperacional === PREOPERACIONAL.REALIZADO) {
+    throw new ErrorApp(409, `El viaje ${viaje.consecutivo} ya tiene preoperacional (${viaje.consecutivo_preoperacional || ''})`);
+  }
+  return viaje;
+};
+
+const registrarPreoperacional = (consecutivo, { consecutivo_preoperacional, odometro, fecha }) =>
+  conCandado(CANDADO, async () => {
+    const { encabezados, viaje } = await buscarViaje(consecutivo);
+    await escribir(encabezados, viaje, {
+      estado_preoperacional: PREOPERACIONAL.REALIZADO,
+      consecutivo_preoperacional: consecutivo_preoperacional || '',
+      fecha_preoperacional: fecha || ahora(),
+      odometro_preoperacional: aNumero(odometro) || '',
+    });
+    return viaje;
+  });
+
+// ─────────────────────────────────────────────────────────────
+// 4. CERRAR VIAJE (conductor; propietario/admin pueden hacerlo a su nombre)
+// ─────────────────────────────────────────────────────────────
+
+async function leerCargaYPrecio(datos, viaje, { obligatorio }) {
+  const cambios = {};
+  const capacidad = await capacidadDe(viaje.placa);
+
+  const vieneCargue = datos.kilos_cargue !== undefined && datos.kilos_cargue !== '';
+  const vieneDescargue = datos.kilos_descargue !== undefined && datos.kilos_descargue !== '';
+  if (obligatorio || vieneCargue) cambios.kilos_cargue = normalizarKilos(datos.kilos_cargue, 'cargue', capacidad);
+  if (obligatorio || vieneDescargue) cambios.kilos_descargue = normalizarKilos(datos.kilos_descargue, 'descargue', capacidad);
+  if (cambios.kilos_cargue || cambios.kilos_descargue) {
+    validarDescargue(
+      cambios.kilos_cargue ?? aNumero(viaje.kilos_cargue),
+      cambios.kilos_descargue ?? aNumero(viaje.kilos_descargue)
+    );
+  }
+
+  if (obligatorio || (datos.valor_tonelada_final !== undefined && datos.valor_tonelada_final !== '')) {
+    cambios.valor_tonelada_final = validarPrecioTonelada(datos.valor_tonelada_final, 'valor de la tonelada final');
+  }
+
+  if (obligatorio || datos.fecha_fin_viaje) {
+    const fin = aFechaISO(datos.fecha_fin_viaje);
+    if (!fin) throw new ErrorApp(400, 'Ingrese la fecha de fin del viaje');
+    if (viaje.fecha_inicio && parsearFecha(fin) < parsearFecha(viaje.fecha_inicio)) {
+      throw new ErrorApp(400, 'La fecha de fin no puede ser anterior a la fecha de inicio');
+    }
+    cambios.fecha_fin_viaje = fin;
+  }
+  return cambios;
+}
+
+const cerrarViaje = (usuario, consecutivo, datos, archivos) =>
+  conCandado(CANDADO, async () => {
+    const { encabezados, viaje } = await buscarViaje(consecutivo);
+    exigirAcceso(usuario, viaje);
+    if (usuario.perfil === PERFIL.CONDUCTOR && usuario.email !== viaje.correo_usuario) {
+      throw new ErrorApp(403, 'Solo el conductor que hizo el viaje puede cerrarlo');
+    }
+    if (viaje.estado_viaje === ESTADOS.SOLICITADO) {
+      throw new ErrorApp(409, 'El anticipo de este viaje aún no ha sido consignado. No se puede cerrar todavía.');
+    }
+    exigirEstado(viaje, ESTADOS.CONSIGNADO);
+    if (viaje.estado_preoperacional !== PREOPERACIONAL.REALIZADO) {
+      throw new ErrorApp(409, 'Haga el preoperacional de este viaje antes de cerrarlo');
+    }
+
+    const cambios = await leerCargaYPrecio(datos, viaje, { obligatorio: true });
+
+    const existentes = (await detalle.gastosPorQuien(viaje.consecutivo)).conductor;
+    const gastos = leerGastosFormulario(datos, archivos, 'conductor');
+    validarGastos(gastos, 'conductor', existentes, true);
+
+    const manifiestos = archivos.manifiesto || [];
+    if (!manifiestos.length && !viaje.link_manifiesto) throw new ErrorApp(400, 'Adjunte el manifiesto del viaje');
+
+    // Archivos a Drive
+    const raiz = await carpetaViaje(viaje.consecutivo);
+    cambios.link_carpeta = raiz.link;
+    if (manifiestos.length) {
+      const carpeta = await carpetaViaje(viaje.consecutivo, 'Manifiesto');
+      await subirArchivos(manifiestos, carpeta.id, 'Manifiesto - ');
+      cambios.link_manifiesto = carpeta.link;
+    }
+
+    const { total, link } = await guardarGastosConSoportes(viaje.consecutivo, 'conductor', gastos);
+    cambios.total_gastos_conductor = total;
+    if (link) cambios.link_gastos_conductor = link;
+
+    const cliente = await buscarCliente(viaje.cliente);
+    const calculado = calcularViaje({ ...viaje, ...cambios }, cliente || {});
+
+    await escribir(encabezados, viaje, {
+      ...cambios,
+      ...calculado,
+      fecha_cierre: ahora(),
+      estado_viaje: ESTADOS.COMPLETADO,
+    });
+    return viaje;
+  });
+
+// ─────────────────────────────────────────────────────────────
+// 5. APROBAR (propietario / admin). Puede corregir lo del conductor.
+// ─────────────────────────────────────────────────────────────
+
+const aprobarViaje = (usuario, consecutivo, datos, archivos) =>
+  conCandado(CANDADO, async () => {
+    const { encabezados, viaje } = await buscarViaje(consecutivo);
+    exigirGestion(usuario, viaje);
+    exigirEstado(viaje, ESTADOS.COMPLETADO);
+
+    const cambios = await leerCargaYPrecio(datos, viaje, { obligatorio: false });
+
+    const existentes = await detalle.gastosPorQuien(viaje.consecutivo);
+
+    // Correcciones a los gastos del conductor (sin exigir soporte: el propietario tiene los recibos)
+    const gastosConductor = leerGastosFormulario(datos, archivos, 'conductor');
+    validarGastos(gastosConductor, 'conductor', existentes.conductor, false);
+    if (gastosConductor.length) {
+      const { total, link } = await guardarGastosConSoportes(viaje.consecutivo, 'conductor', gastosConductor);
+      cambios.total_gastos_conductor = total;
+      if (link) cambios.link_gastos_conductor = link;
+    }
+
+    // Gastos del propietario
+    const gastosPropietario = leerGastosFormulario(datos, archivos, 'propietario');
+    validarGastos(gastosPropietario, 'propietario', existentes.propietario, true);
+    const propietario = await guardarGastosConSoportes(viaje.consecutivo, 'propietario', gastosPropietario);
+    cambios.total_gastos_propietario = propietario.total;
+    if (propietario.link) cambios.link_gastos_propietario = propietario.link;
+
+    const anticipoCliente = Math.round(aNumero(datos.valor_anticipo_cliente));
+    if (anticipoCliente < 0) throw new ErrorApp(400, 'El anticipo del cliente no puede ser negativo');
+    cambios.valor_anticipo_cliente = anticipoCliente;
+
+    const cliente = await buscarCliente(viaje.cliente);
+    const calculado = calcularViaje({ ...viaje, ...cambios }, cliente || {});
+
+    await escribir(encabezados, viaje, {
+      ...cambios,
+      ...calculado,
+      fecha_aprobacion: ahora(),
+      aprobado_por: usuario.email,
+      estado_viaje: ESTADOS.APROBADO,
+    });
+
+    await registrarGastoVehiculo(viaje);
+    await sumarContadores(viaje);
+    return viaje;
+  });
+
+// ─────────────────────────────────────────────────────────────
+// 6. FACTURAR (propietario / admin)
+// ─────────────────────────────────────────────────────────────
+
+const facturarViaje = (usuario, consecutivo, datos) =>
+  conCandado(CANDADO, async () => {
+    const { encabezados, viaje } = await buscarViaje(consecutivo);
+    exigirGestion(usuario, viaje);
+    exigirEstado(viaje, ESTADOS.APROBADO);
+
+    const valorReal = Math.round(aNumero(datos.valor_viaje_real));
+    if (valorReal <= 0) throw new ErrorApp(400, 'Ingrese el valor facturado al cliente');
+
+    const numeroFactura = String(datos.num_factura_cliente ?? '').trim();
+    if (!numeroFactura) throw new ErrorApp(400, 'Ingrese el número de la factura');
+
+    const diezAnterior = aNumero(viaje.diez_pcto);
+    const cliente = await buscarCliente(viaje.cliente);
+    const calculado = calcularViaje({ ...viaje, valor_viaje_real: valorReal }, cliente || {});
+
+    const cambios = {
+      ...calculado,
+      valor_viaje_real: valorReal,
+      num_factura_cliente: numeroFactura,
+      notas_facturacion: String(datos.notas_facturacion ?? '').trim(),
+      fecha_facturacion: ahora(),
+      estado_viaje: ESTADOS.FACTURADO,
+    };
+
+    // Si la nómina ya pagó el 10 % sobre el valor estimado, la diferencia queda para la próxima nómina
+    let ajuste = 0;
+    if (viaje.liquidado === 'si') {
+      ajuste = calculado.diez_pcto - diezAnterior;
+      cambios.ajuste_diez_pcto_pendiente = aNumero(viaje.ajuste_diez_pcto_pendiente) + ajuste;
+    }
+
+    await escribir(encabezados, viaje, cambios);
+    return { viaje, ajuste };
+  });
+
+// ─────────────────────────────────────────────────────────────
+// 7. PAGO DEL CLIENTE (propietario / admin)
+// ─────────────────────────────────────────────────────────────
+
+const registrarPagoCliente = (usuario, consecutivo, datos = {}) =>
+  conCandado(CANDADO, async () => {
+    const { encabezados, viaje } = await buscarViaje(consecutivo);
+    exigirGestion(usuario, viaje);
+    exigirEstado(viaje, ESTADOS.FACTURADO);
+
+    await escribir(encabezados, viaje, {
+      estado_saldo_cliente: 'pagado',
+      fecha_pago_cliente: aFechaISO(datos.fecha_pago_cliente) || hoy(),
+      estado_viaje: ESTADOS.PAGADO,
+    });
+
+    try {
+      await clienteHelper.actualizarEconomiaCliente(
+        viaje.cliente,
+        aNumero(viaje.valor_viaje_estimado),
+        aNumero(viaje.valor_viaje_real),
+        aNumero(viaje.ganancia_viaje_real)
+      );
+    } catch (error) {
+      console.warn('[viajes] No se pudieron actualizar los totales del cliente:', error.message);
+    }
+    return viaje;
+  });
+
+// ─────────────────────────────────────────────────────────────
+// 8. EDITAR (solo administrador, antes de facturar)
+// ─────────────────────────────────────────────────────────────
+
+const editarViaje = (usuario, consecutivo, datos, archivos) =>
+  conCandado(CANDADO, async () => {
+    const { encabezados, viaje } = await buscarViaje(consecutivo);
+    if (!esAdmin(usuario)) throw new ErrorApp(403, 'Solo el administrador puede editar viajes');
+    exigirEstado(viaje, ESTADOS.SOLICITADO, ESTADOS.CONSIGNADO, ESTADOS.COMPLETADO, ESTADOS.APROBADO);
+    if (viaje.liquidado === 'si') throw new ErrorApp(409, 'El viaje ya fue liquidado en nómina. No se puede editar.');
+
+    const cambios = {};
+    const estado = viaje.estado_viaje;
+    const yaCerrado = [ESTADOS.COMPLETADO, ESTADOS.APROBADO].includes(estado);
+
+    if (datos.cliente !== undefined && datos.cliente !== '') {
+      const cliente = await buscarCliente(datos.cliente);
+      if (!cliente) throw new ErrorApp(400, 'Cliente no válido');
+      cambios.cliente = String(cliente.codigo).trim();
+    }
+    if (datos.destino !== undefined && String(datos.destino).trim()) cambios.destino = String(datos.destino).trim();
+    if (datos.fecha_inicio) {
+      cambios.fecha_inicio = aFechaISO(datos.fecha_inicio);
+      if (!cambios.fecha_inicio) throw new ErrorApp(400, 'Fecha de inicio no válida');
+    }
+    if (datos.valor_anticipo_conductor !== undefined && datos.valor_anticipo_conductor !== '') {
+      cambios.valor_anticipo_conductor = Math.round(aNumero(datos.valor_anticipo_conductor));
+    }
+    if (datos.valor_tonelada_inicial !== undefined && datos.valor_tonelada_inicial !== '') {
+      cambios.valor_tonelada_inicial = validarPrecioTonelada(datos.valor_tonelada_inicial, 'valor de la tonelada inicial');
+    }
+    if (estado !== ESTADOS.SOLICITADO && datos.valor_anticipo_consignado !== undefined && datos.valor_anticipo_consignado !== '') {
+      const valor = Math.round(aNumero(datos.valor_anticipo_consignado));
+      if (valor <= 0) throw new ErrorApp(400, 'El anticipo consignado debe ser mayor a cero');
+      cambios.valor_anticipo_consignado = valor;
+    }
+
+    if (yaCerrado) {
+      Object.assign(cambios, await leerCargaYPrecio(datos, viaje, { obligatorio: false }));
+
+      const existentes = await detalle.gastosPorQuien(viaje.consecutivo);
+      const gastosConductor = leerGastosFormulario(datos, archivos, 'conductor');
+      validarGastos(gastosConductor, 'conductor', existentes.conductor, false);
+      if (gastosConductor.length) {
+        const r = await guardarGastosConSoportes(viaje.consecutivo, 'conductor', gastosConductor);
+        cambios.total_gastos_conductor = r.total;
+        if (r.link) cambios.link_gastos_conductor = r.link;
+      }
+
+      if (estado === ESTADOS.APROBADO) {
+        const gastosPropietario = leerGastosFormulario(datos, archivos, 'propietario');
+        validarGastos(gastosPropietario, 'propietario', existentes.propietario, false);
+        if (gastosPropietario.length) {
+          const r = await guardarGastosConSoportes(viaje.consecutivo, 'propietario', gastosPropietario);
+          cambios.total_gastos_propietario = r.total;
+          if (r.link) cambios.link_gastos_propietario = r.link;
+        }
+        if (datos.valor_anticipo_cliente !== undefined && datos.valor_anticipo_cliente !== '') {
+          cambios.valor_anticipo_cliente = Math.round(aNumero(datos.valor_anticipo_cliente));
+        }
+      }
+
+      const cliente = await buscarCliente(cambios.cliente || viaje.cliente);
+      Object.assign(cambios, calcularViaje({ ...viaje, ...cambios }, cliente || {}));
+    }
+
+    if (!Object.keys(cambios).length) throw new ErrorApp(400, 'No hay cambios para guardar');
+
+    cambios.editado_por = usuario.email;
+    cambios.fecha_edicion = ahora();
+    await escribir(encabezados, viaje, cambios);
+
+    if (estado === ESTADOS.APROBADO) await registrarGastoVehiculo(viaje);
+    return viaje;
+  });
+
+// ─────────────────────────────────────────────────────────────
+// Otros
+// ─────────────────────────────────────────────────────────────
+
+const legalizarFactura = async (usuario, consecutivo, tipo_gasto, quien, numero_factura) => {
+  const { viaje } = await buscarViaje(consecutivo);
+  exigirGestion(usuario, viaje);
+  return detalle.legalizarFacturaIndividual(viaje.consecutivo, tipo_gasto, quien, numero_factura);
+};
+
+/**
+ * Para nómina: viajes de un conductor que se pueden liquidar y viajes ya liquidados con ajuste del 10 % pendiente.
+ * El propietario solo ve los de sus placas.
+ */
+const pendientesConductor = async (usuario, email) => {
+  const correo = textoMinuscula(email);
+  const { viajes } = await leerViajes();
+  const propios = viajes.filter((v) => v.correo_usuario === correo && (!usuario || puedeVerViaje(usuario, v)));
+  const limpio = ({ _fila, ...v }) => v;
+  return {
+    por_liquidar: propios
+      .filter((v) => ESTADOS_LIQUIDABLES.includes(v.estado_viaje) && v.liquidado !== 'si')
+      .sort((a, b) => numero(a.consecutivo) - numero(b.consecutivo))
+      .map(limpio),
+    con_ajuste: propios
+      .filter((v) => v.liquidado === 'si' && aNumero(v.ajuste_diez_pcto_pendiente) !== 0)
+      .map(limpio),
+  };
+};
+
+/** Para nómina: marca los viajes como liquidados (por nombre de columna) */
+const marcarViajesLiquidados = (consecutivos, consecutivoNomina = '') =>
+  conCandado(CANDADO, async () => {
+    const { encabezados, viajes } = await leerViajes();
+    const placas = new Set();
+    for (const c of consecutivos) {
+      const viaje = viajes.find((v) => v.consecutivo === String(c).trim().toUpperCase());
+      if (!viaje) continue;
+      await escribir(encabezados, viaje, { liquidado: 'si', fecha_liquidacion: ahora(), consecutivo_nomina: consecutivoNomina });
+      placas.add(viaje.placa);
+    }
+    return [...placas];
+  });
+
+/** Para nómina: deja en cero el ajuste del 10 % ya pagado */
+const aplicarAjustes = (consecutivos) =>
+  conCandado(CANDADO, async () => {
+    const { encabezados, viajes } = await leerViajes();
+    for (const c of consecutivos) {
+      const viaje = viajes.find((v) => v.consecutivo === String(c).trim().toUpperCase());
+      if (viaje) await escribir(encabezados, viaje, { ajuste_diez_pcto_pendiente: 0 });
+    }
+  });
+
+// ── Consultas ──
+
+const CAMPOS_LISTA = [
+  'consecutivo', 'placa', 'cliente', 'destino', 'fecha_inicio', 'fecha_fin_viaje', 'estado_viaje',
+  'estado_preoperacional', 'usuario', 'correo_usuario', 'valor_anticipo_conductor', 'valor_anticipo_consignado',
+  'saldo_pendiente_conductor', 'valor_viaje_estimado', 'valor_viaje_real', 'liquidado',
+];
+
+/** Lista para la pantalla de viajes: el admin ve todo; los demás, sus placas */
+const listarViajes = async (usuario, { estado = '', placa = '', pagina = 1, limite = 100 } = {}) => {
+  const { viajes } = await leerViajes();
+  const clientes = await nombresClientes();
+
+  let visibles = viajes.filter((v) => puedeVerViaje(usuario, v));
+  if (estado) visibles = visibles.filter((v) => v.estado_viaje === textoMinuscula(estado));
+  if (placa) visibles = visibles.filter((v) => v.placa === String(placa).trim().toUpperCase());
+  visibles.sort(masRecientePrimero);
+
+  const desde = (Math.max(1, pagina) - 1) * limite;
+  const datos = visibles.slice(desde, desde + limite).map((v) => {
+    const resumen = Object.fromEntries(CAMPOS_LISTA.map((c) => [c, v[c] ?? '']));
+    resumen.cliente_nombre = clientes[v.cliente] || v.cliente;
+    if (usuario.perfil === PERFIL.CONDUCTOR) delete resumen.valor_viaje_estimado;
+    return resumen;
+  });
+
+  // Conteo por estado (para los chips de la pantalla)
+  const conteo = {};
+  viajes
+    .filter((v) => puedeVerViaje(usuario, v) && (!placa || v.placa === String(placa).trim().toUpperCase()))
+    .forEach((v) => {
+      conteo[v.estado_viaje] = (conteo[v.estado_viaje] || 0) + 1;
+    });
+
+  return { datos, pagina, limite, total: visibles.length, hayMas: desde + limite < visibles.length, conteo };
+};
+
+/** Detalle completo + nombre del cliente + gastos. Lo que no le corresponde al conductor no se envía */
+const obtenerViaje = async (usuario, consecutivo) => {
+  const { viaje } = await buscarViaje(consecutivo);
+  exigirAcceso(usuario, viaje);
+  const cliente = await buscarCliente(viaje.cliente);
+  let gastos = await detalle.getGastosViaje(viaje.consecutivo);
+  if (usuario.perfil === PERFIL.CONDUCTOR) gastos = gastos.filter((g) => g.quien === 'conductor');
+  return { ...vistaPara(usuario, viaje), cliente_nombre: cliente?.empresa || viaje.cliente, gastos };
+};
+
+const obtenerGastosViaje = async (usuario, consecutivo) => (await obtenerViaje(usuario, consecutivo)).gastos;
+
+/** Compatibilidad con Preoperacionales: { total: { count, consecutivos } } */
+const getResumenViajesPorPlaca = async (placas) => {
+  const lista = (Array.isArray(placas) ? placas : String(placas).split(','))
+    .map((p) => String(p).trim().toUpperCase())
+    .filter(Boolean);
+  const viajes = (await getTodosLosViajes()).filter((v) => lista.includes(v.placa));
+  const clientes = await nombresClientes();
+  return {
+    total: {
+      count: viajes.length,
+      consecutivos: viajes.map((v) => ({
+        consecutivo: v.consecutivo,
+        placa: v.placa,
+        cliente: v.cliente,
+        cliente_nombre: clientes[v.cliente] || v.cliente,
+        destino: v.destino,
+        fecha_inicio: v.fecha_inicio,
+        estado_viaje: v.estado_viaje,
+        estado_preoperacional: v.estado_preoperacional,
+        usuario: v.usuario,
+      })),
+    },
+  };
 };
 
 const getViajesByConsecutivo = async (consecutivo) => {
+  const { viajes } = await leerViajes();
+  const v = viajes.find((x) => x.consecutivo === String(consecutivo).trim().toUpperCase());
+  if (!v) return null;
+  const { _fila, ...resto } = v;
+  return resto;
+};
+
+/** Admin: ordenar por un campo numérico o de fecha */
+const ordenarViajes = async (campo, orden = 'desc') => {
   const viajes = await getTodosLosViajes();
-  return viajes.find(viaje => 
-    viaje.consecutivo && viaje.consecutivo.toLowerCase() === consecutivo.toLowerCase()
+  const esFecha = campo.startsWith('fecha');
+  const valor = (v) => (esFecha ? parsearFecha(v[campo])?.getTime() || 0 : aNumero(v[campo]));
+  return viajes.sort((a, b) => (orden === 'desc' ? valor(b) - valor(a) : valor(a) - valor(b)));
+};
+
+/** Admin: filtrar por un campo de texto */
+const filtrarViajes = async (campo, valor) =>
+  (await getTodosLosViajes()).filter((v) => textoMinuscula(v[campo]) === textoMinuscula(valor));
+
+/** Viajes facturados pendientes de pago de un cliente */
+const facturarCliente = async (usuario, codigoCliente) => {
+  const viajes = (await getTodosLosViajes()).filter(
+    (v) =>
+      v.cliente === String(codigoCliente).trim() &&
+      v.estado_viaje === ESTADOS.FACTURADO &&
+      (esAdmin(usuario) || placasDe(usuario).includes(v.placa))
   );
-};
-
-const filtrarViajesPorCampoTexto = (viajes, campo, valor) => {
-  return viajes.filter(viaje => 
-    viaje[campo] && viaje[campo].toLowerCase() === valor.toLowerCase()
-  );
-};
-
-const getViajesPorEstadoSaldoCliente = async (valor) => {
-  const viajes = await getTodosLosViajes();
-  return filtrarViajesPorCampoTexto(viajes, 'estado_saldo_cliente', valor);
-};
-
-const getViajesPorEstadoViaje = async (valor) => {
-  const viajes = await getTodosLosViajes();
-  return filtrarViajesPorCampoTexto(viajes, 'estado_viaje', valor);
-};
-
-const ordenarViajesPorCampoNumerico = (viajes, campo, orden = 'desc') => {
-  return viajes.sort((a, b) => {
-    const valorA = parseFloat(a[campo]) || 0;
-    const valorB = parseFloat(b[campo]) || 0;
-    
-    return orden.toLowerCase() === 'desc' ? valorB - valorA : valorA - valorB;
-  });
-};
-
-const getViajesOrdenadosPorFechaInicio = async (orden = 'desc') => {
-  const viajes = await getTodosLosViajes();
-  
-  return viajes.sort((a, b) => {
-    const fechaA = new Date(a.fecha_inicio || 0);
-    const fechaB = new Date(b.fecha_inicio || 0);
-    
-    return orden.toLowerCase() === 'desc' ? fechaB - fechaA : fechaA - fechaB;
-  });
-};
-
-const getViajesOrdenadosPorFechaFin = async (orden = 'desc') => {
-  const viajes = await getTodosLosViajes();
-  
-  return viajes.sort((a, b) => {
-    const fechaA = new Date(a.fecha_fin_viaje || 0);
-    const fechaB = new Date(b.fecha_fin_viaje || 0);
-    
-    return orden.toLowerCase() === 'desc' ? fechaB - fechaA : fechaA - fechaB;
-  });
-};
-
-const getViajesOrdenadosPorValorViajeReal = async (orden = 'desc') => {
-  const viajes = await getTodosLosViajes();
-  return ordenarViajesPorCampoNumerico(viajes, 'valor_viaje_real', orden);
-};
-
-const getViajesOrdenadosPorValorToneladaInicial = async (orden = 'desc') => {
-  const viajes = await getTodosLosViajes();
-  return ordenarViajesPorCampoNumerico(viajes, 'valor_tonelada_inicial', orden);
-};
-
-const getViajesOrdenadosPorValorToneladaFinal = async (orden = 'desc') => {
-  const viajes = await getTodosLosViajes();
-  return ordenarViajesPorCampoNumerico(viajes, 'valor_tonelada_final', orden);
-};
-
-const getViajesOrdenadosPorDiezPcto = async (orden = 'desc') => {
-  const viajes = await getTodosLosViajes();
-  return ordenarViajesPorCampoNumerico(viajes, 'diez_pcto', orden);
-};
-
-const getViajesOrdenadosPorAnticipoConductor = async (orden = 'desc') => {
-  const viajes = await getTodosLosViajes();
-  return ordenarViajesPorCampoNumerico(viajes, 'valor_anticipo_conductor', orden);
-};
-
-const getViajesOrdenadosPorGastosConductor = async (orden = 'desc') => {
-  const viajes = await getTodosLosViajes();
-  return ordenarViajesPorCampoNumerico(viajes, 'total_gastos_conductor', orden);
-};
-
-const getViajesOrdenadosPorGastosPropietario = async (orden = 'desc') => {
-  const viajes = await getTodosLosViajes();
-  return ordenarViajesPorCampoNumerico(viajes, 'total_gastos_propietario', orden);
-};
-
-const getViajesOrdenadosPorGananciaEstimada = async (orden = 'desc') => {
-  const viajes = await getTodosLosViajes();
-  return ordenarViajesPorCampoNumerico(viajes, 'ganancia_viaje_estimada', orden);
-};
-
-const getViajesOrdenadosPorGananciaReal = async (orden = 'desc') => {
-  const viajes = await getTodosLosViajes();
-  return ordenarViajesPorCampoNumerico(viajes, 'ganancia_viaje_real', orden);
-};
-
-const getResumenViajesPorSolicitante = async (email) => {
-  try {
-    const todoslosViajes = await getTodosLosViajes();
-    const viajesFiltrados = todoslosViajes.filter(s => s.correo_usuario  === email);
-
-    const mapConDatos = (lista) => {
-      return lista.map(r => ({
-        consecutivo: r.consecutivo,
-        fecha_creacion: r.fecha_creacion || '',
-        correo_usuario : r.correo_usuario || '',
-        usuario: r.usuario || '',
-        placa: r.placa || '',
-        cliente: r.cliente || '',
-        destino: r.destino || '',
-        fecha_inicio: r.fecha_inicio || '',
-        estado_viaje: r.estado_viaje || '',
-      }));  
-    };
-
-    return {
-      total: {
-        count: viajesFiltrados.length,
-        consecutivos: mapConDatos(viajesFiltrados)
-      }
-    };
-  } catch (error) {
-    console.error('Error al obtener resumen de preoperacionales por email:', error);
-    throw error;
-  }
-};
-
-const getSiguienteConsecutivo = async () => {
-  const viajes = await getTodosLosViajes();
-  
-  if (!viajes.length) return "V-1";
-
-  const maxNumero = Math.max(
-    ...viajes.map((v) => parseInt(v.consecutivo?.split('-')[1], 10) || 0)
-  );
-  
-  return `V-${maxNumero + 1}`;
-};
-
-const guardarAnticipo = async ({ placa, cliente, destino, fecha_inicio, valor_anticipo_conductor, valor_tonelada_inicial, correo_usuario, usuario, fecha_creacion, estado_preoperacional  }) => {
-  const sheets = getSheetsClient();
-  const consecutivo = await getSiguienteConsecutivo();
-
-  // 39 columnas A hasta AM
-  const nuevaFila = [
-    consecutivo,                    // A
-    placa,                          // B
-    cliente,                        // C
-    destino,                        // D
-    fecha_inicio,                   // E
-    '',                             // F - valor_anticipo_cliente
-    '',                             // G - saldo_pendiente_cliente_sin_descuento
-    '',                             // H - saldo_pendiente_cliente_real
-    '',                             // I - descuento_rete_fuente
-    '',                             // J - descuento_rete_ica
-    '',                             // K - total_descuentos_cliente
-    'pendiente',                    // L - estado_saldo_cliente
-    '',                             // M - valor_viaje_estimado
-    '',                             // N - valor_viaje_real
-    '',                             // O - diferencia_facturacion
-    '',                             // P - notas_facturacion
-    '',                             // Q - num_factura_cliente
-    '',                             // R - toneladas_inicio
-    '',                             // S - toneladas_descargue
-    '',                             // T - diferencia_kg
-    valor_tonelada_inicial,         // U - valor_tonelada_inicial
-    '',                             // V - valor_tonelada_final
-    '',                             // W - diez_pcto
-    valor_anticipo_conductor,       // X - valor_anticipo_conductor
-    '',                             // Y - saldo_anticipo_conductor
-    '',                             // Z - total_gastos_conductor
-    '',                             // AA - saldo_pendiente_conductor
-    '',                             // AB - fecha_fin_viaje
-    '',                             // AC - total_gastos_propietario
-    '',                             // AD - ganancia_viaje_estimada
-    '',                             // AE - ganancia_viaje_real
-    '',                             // AF - link_manifiesto
-    '',                             // AG - link_gastos_conductor
-    '',                             // AH - link_gastos_propietario
-    correo_usuario,                 // AI - correo_usuario
-    usuario,                        // AJ - usuario
-    fecha_creacion,                 // AK - fecha_creacion
-    'solicitado',                   // AL - estado_viaje
-    'no',                           // AM - liquidado
-    estado_preoperacional           // AN - estado del preoperacional
-  ];
-
-  await sheets.spreadsheets.values.append({
-    spreadsheetId,
-    range: 'Viajes!A1',
-    valueInputOption: 'RAW',
-    insertDataOption: 'INSERT_ROWS',
-    requestBody: { values: [nuevaFila] },
-  });
-
-  return { consecutivo };
-};
-
-const cerrarViajeYGastosConductor = async (consecutivo, datos, archivos) => {
-  const sheets = getSheetsClient();
-
-  const response = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: 'Viajes!A2:AM1000',
-  });
-
-  const filas = response.data.values;
-  const filaIndex = filas.findIndex(f => f[0]?.toLowerCase() === consecutivo.toLowerCase());
-  if (filaIndex === -1) return null;
-
-  const filaActual = filas[filaIndex];
-
-const gastosValidar = [
-  'peajes', 'lavadas', 'parqueadero', 'engrase',
-  'fumigacion', 'otro', 'cargue', 'descargue', 'comision'
-];
-
-const gastosConSoporte = [
-  'peajes', 'lavadas', 'parqueadero', 'engrase',
-  'fumigacion', 'otro'
-];
-
-for (const gasto of gastosConSoporte) {
-  const valor = parseFloat(datos[`${gasto}_conductor`]) || 0;
-  const tieneArchivos = archivos?.[`${gasto}_conductor_archivos`]?.length > 0;
-  if (valor > 0 && !tieneArchivos) {
-    throw new Error(`Debe adjuntar soporte para ${gasto}_conductor`);
-  }
-}
-
-  // ===== VALIDAR Y SUBIR MANIFIESTO ===== (AGREGAR ESTO)
- if (!archivos || !archivos['manifiesto'] || archivos['manifiesto'].length === 0) {
-  throw new Error('Debe adjuntar el manifiesto del viaje');
- }
-
- const linkManifiesto = await subirManifiesto(archivos['manifiesto'][0], consecutivo);
-
-  const placa = filaActual[1]; // B
-  let linkGastosConductor = null;
-  
-  if (archivos && Object.keys(archivos).length > 0) {
-    linkGastosConductor = await procesarArchivosGastos(archivos, placa, consecutivo, 'conductor');
-  }
-
-  // ===== CALCULAR TOTALES =====
-  const gastosConValor = {};
-  let total_gastos_conductor = 0;
-  
-  for (const gasto of gastosValidar) {
-    const valor = parseFloat(datos[`${gasto}_conductor`]) || 0;
-    gastosConValor[`${gasto}_conductor`] = valor;
-    total_gastos_conductor += valor;
-    
-    if (valor > 0) {
-      gastosConValor[`tipo_factura_${gasto}_conductor`] = datos[`tipo_factura_${gasto}_conductor`];
-      gastosConValor[`link_${gasto}_conductor`] = linkGastosConductor;
-    }
-  }
-
-  // Toneladas
-  const toneladas_inicio = parseFloat(datos.toneladas_inicio) || 0;
-  const toneladas_descargue = parseFloat(datos.toneladas_descargue) || 0;
-  const diferencia_kg = (toneladas_inicio - toneladas_descargue) * 1000;
-
-  // Valor del viaje estimado
-  const valor_tonelada_final = parseFloat(datos.valor_tonelada_final) || parseFloat(filaActual[18]) || 0; // T o S
-  const valor_viaje_estimado = toneladas_descargue * valor_tonelada_final;
-
-  // Cálculos conductor
-  const valor_anticipo_conductor = parseFloat(filaActual[23]) || 0;
-  const saldo_anticipo_conductor = valor_anticipo_conductor - total_gastos_conductor;
-  const diez_pcto = valor_viaje_estimado * 0.10;
-  const saldo_pendiente_conductor = diez_pcto - saldo_anticipo_conductor;
-
-  // ===== REGISTRAR GASTOS EN DETALLE_GASTOS_VIAJES =====
-  await detalleGastosViajesHelper.registrarGastosViaje(consecutivo, gastosConValor, 'conductor');
-  
-  filaActual[31] = linkManifiesto;
-  filaActual[32] = linkGastosConductor || '';
-  // ===== ACTUALIZAR VIAJE =====
-  filaActual[12] = valor_viaje_estimado;               
-  filaActual[17] = toneladas_inicio;                   
-  filaActual[18] = toneladas_descargue;                
-  filaActual[19] = diferencia_kg;                      
-  filaActual[21] = valor_tonelada_final;               
-  filaActual[22] = diez_pcto;                          
-  filaActual[24] = saldo_anticipo_conductor;           
-  filaActual[25] = total_gastos_conductor;             
-  filaActual[26] = saldo_pendiente_conductor;          
-  filaActual[27] = datos.fecha_fin_viaje || '';        
-  filaActual[37] = 'completado';                       
-
-  const filaEnHoja = filaIndex + 2;
-  await sheets.spreadsheets.values.update({
-    spreadsheetId,
-    range: `Viajes!A${filaEnHoja}:AM${filaEnHoja}`,
-    valueInputOption: 'RAW',
-    requestBody: { values: [filaActual] },
-  });
-
-  return { 
-    valor_viaje_estimado, 
-    diferencia_kg, 
-    total_gastos_conductor, 
-    saldo_anticipo_conductor,
-    saldo_pendiente_conductor,
-    diez_pcto,
-    placa: filaActual[1]
-  };
-};
-
-const aprobarViajeYGastosPropietario = async (consecutivo, datos, archivos) => {
-  const sheets = getSheetsClient();
-
-  const response = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: 'Viajes!A2:AM1000',
-  });
-
-  const filas = response.data.values;
-  const filaIndex = filas.findIndex(f => f[0]?.toLowerCase() === consecutivo.toLowerCase());
-  if (filaIndex === -1) return null;
-
-  const filaActual = filas[filaIndex];
-
-  // Buscar cliente por código
-  const codigoCliente = filaActual[2]; // C
-  const clientes = await clienteHelper.getClientes();
-  const cliente = clientes.find(c => c.codigo === codigoCliente);
-
-  if (!cliente) {
-    throw new Error('Cliente no encontrado');
-  }
-
-  const rete_fuente = cliente.rete_fuente || 'no';
-  const rete_ica = parseFloat(cliente.rete_ica) || 0;
-
-  // ===== VALIDAR ARCHIVOS OBLIGATORIOS PROPIETARIO =====
-  const gastosValidar = [
-    'peajes', 'lavadas', 'parqueadero', 'engrase', 
-    'fumigacion', 'otro', 'cargue', 'descargue', 'comision'
-  ];
-  
-  for (const gasto of gastosValidar) {
-    const valor = parseFloat(datos[`${gasto}_propietario`]) || 0;
-    const tieneArchivos = archivos && archivos[`${gasto}_propietario_archivos`] && archivos[`${gasto}_propietario_archivos`].length > 0;
-    
-    if (valor > 0 && !tieneArchivos) {
-      throw new Error(`Debe adjuntar soporte para ${gasto}_propietario`);
-    }
-  }
-
-  // ===== SUBIR ARCHIVOS A DRIVE =====
-  const placa = filaActual[1]; // B
-  let linkGastosPropietario = null;
-  
-  if (archivos && Object.keys(archivos).length > 0) {
-    linkGastosPropietario = await procesarArchivosGastos(archivos, placa, consecutivo, 'propietario');
-  }
-
-  // ===== CALCULAR TOTALES =====
-  const gastosConValor = {};
-  let total_gastos_propietario = 0;
-  
-  for (const gasto of gastosValidar) {
-    const valor = parseFloat(datos[`${gasto}_propietario`]) || 0;
-    gastosConValor[`${gasto}_propietario`] = valor;
-    total_gastos_propietario += valor;
-    
-    if (valor > 0) {
-      gastosConValor[`tipo_factura_${gasto}_propietario`] = datos[`tipo_factura_${gasto}_propietario`];
-      gastosConValor[`link_${gasto}_propietario`] = linkGastosPropietario;
-    }
-  }
-
-  // Cálculos cliente
-  const valor_viaje_estimado = parseFloat(filaActual[12]) || 0; // M
-  const valor_anticipo_cliente = parseFloat(datos.valor_anticipo_cliente) || 0;
-  const saldo_pendiente_cliente_sin_descuento = valor_viaje_estimado - valor_anticipo_cliente;
-
-  const descuento_rete_fuente = rete_fuente.toLowerCase() === 'si' 
-    ? saldo_pendiente_cliente_sin_descuento * 0.01 
-    : 0;
-  const descuento_rete_ica = saldo_pendiente_cliente_sin_descuento * (rete_ica / 100);
-  const total_descuentos_cliente = descuento_rete_fuente + descuento_rete_ica;
-  const saldo_pendiente_cliente_real = saldo_pendiente_cliente_sin_descuento - total_descuentos_cliente;
-
-  // Ganancia viaje estimada
-  const diez_pcto = parseFloat(filaActual[22]) || 0; 
-  const total_gastos_conductor = parseFloat(filaActual[25]) || 0; // X
-  const ganancia_viaje_estimada = valor_viaje_estimado - diez_pcto - total_gastos_conductor - total_gastos_propietario;
-
-  // ===== REGISTRAR GASTOS EN DETALLE_GASTOS_VIAJES =====
-  await detalleGastosViajesHelper.registrarGastosViaje(consecutivo, gastosConValor, 'propietario');
-
-  // ===== ACTUALIZAR TODOS LOS GASTOS A "APROBADO" =====
-  await detalleGastosViajesHelper.actualizarEstadoGastosViaje(consecutivo, 'aprobado');
-  
-  filaActual[33] = linkGastosPropietario || ''
-  // ===== ACTUALIZAR VIAJE =====
-  filaActual[5] = valor_anticipo_cliente;                  // F
-  filaActual[6] = saldo_pendiente_cliente_sin_descuento;   // G
-  filaActual[7] = saldo_pendiente_cliente_real;            // H
-  filaActual[8] = descuento_rete_fuente;                   // I
-  filaActual[9] = descuento_rete_ica;                      // J
-  filaActual[10] = total_descuentos_cliente;               // K
-  filaActual[28] = total_gastos_propietario;               // AW (nueva posición sin gastos individuales)
-  filaActual[29] = ganancia_viaje_estimada;                // AX
-  filaActual[37] = 'aprobado';                             // BD - estado_viaje
-
-  const filaEnHoja = filaIndex + 2;
-  await sheets.spreadsheets.values.update({
-    spreadsheetId,
-    range: `Viajes!A${filaEnHoja}:AM${filaEnHoja}`,
-    valueInputOption: 'RAW',
-    requestBody: { values: [filaActual] },
-  });
-
-  // ===== REGISTRAR EN GASTOS_VEHICULOS =====
-  await gastosVehiculoHelper.registrarGasto({
-    placa,
-    tipo_gasto: 'viaje',
-    codigo_referencia: consecutivo,
-    valor_gasto: total_gastos_propietario,
-    descripcion: `Gastos propietario viaje ${consecutivo}`,
-    fecha_registro: new Date().toISOString().split('T')[0]
-  });
-
-    await actualizarContadoresViaje(consecutivo);
-
-  return {
-    saldo_pendiente_cliente_real,
-    total_descuentos_cliente,
-    ganancia_viaje_estimada,
-    total_gastos_propietario
-  };
-};
-
-const completarSaldoCliente = async (consecutivo) => {
-  const sheets = getSheetsClient();
-
-  const response = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: 'Viajes!A2:AM1000',
-  });
-
-  const filas = response.data.values;
-  const filaIndex = filas.findIndex(f => f[0]?.toLowerCase() === consecutivo.toLowerCase());
-  if (filaIndex === -1) return null;
-
-  const filaActual = filas[filaIndex];
-
-  // Actualizar estado saldo cliente
-  filaActual[11] = 'pagado'; // L - estado_saldo_cliente
-
-  const codigoCliente = filaActual[2]; // C
-  const valor_viaje_estimado = parseFloat(filaActual[12]) || 0; // M
-  const valor_viaje_real = parseFloat(filaActual[13]) || valor_viaje_estimado; // N (si no está facturado, usa estimado)
-  const ganancia_viaje = parseFloat(filaActual[30]) || parseFloat(filaActual[29]) || 0; // AY o AX
-
-  const filaEnHoja = filaIndex + 2;
-  await sheets.spreadsheets.values.update({
-    spreadsheetId,
-    range: `Viajes!A${filaEnHoja}:AM${filaEnHoja}`,
-    valueInputOption: 'RAW',
-    requestBody: { values: [filaActual] },
-  });
-
-  // Actualizar 3 economías del cliente
-  await clienteHelper.actualizarEconomiaCliente(
-    codigoCliente, 
-    valor_viaje_estimado, 
-    valor_viaje_real, 
-    ganancia_viaje
-  );
-
-  return true;
-};
-
-const editarViajePorConsecutivo = async (consecutivo, nuevosDatos) => {
-  const sheets = getSheetsClient();
-
-  const response = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: 'Viajes!A2:AN1000',
-  });
-
-  const filas = response.data.values;
-  const filaIndex = filas.findIndex(f => f[0]?.toLowerCase() === consecutivo.toLowerCase());
-
-  if (filaIndex === -1) return null;
-
-  const filaActual = filas[filaIndex];
-
-  // Verificar que no esté liquidado
-  if (filaActual[56] === 'si') { // BA
-    throw new Error('No se puede editar un viaje ya liquidado');
-  }
-
-  // Actualizar campos editables básicos
-  if (nuevosDatos.placa) filaActual[1] = nuevosDatos.placa;
-  if (nuevosDatos.cliente) filaActual[2] = nuevosDatos.cliente;
-  if (nuevosDatos.destino) filaActual[3] = nuevosDatos.destino;
-  if (nuevosDatos.fecha_inicio) filaActual[4] = nuevosDatos.fecha_inicio;
-  if (nuevosDatos.valor_anticipo_cliente !== undefined) filaActual[5] = nuevosDatos.valor_anticipo_cliente;
-  if (nuevosDatos.toneladas_inicio !== undefined) filaActual[13] = nuevosDatos.toneladas_inicio;
-  if (nuevosDatos.toneladas_descargue !== undefined) filaActual[14] = nuevosDatos.toneladas_descargue;
-  if (nuevosDatos.valor_tonelada_inicial !== undefined) filaActual[16] = nuevosDatos.valor_tonelada_inicial;
-  if (nuevosDatos.valor_tonelada_final !== undefined) filaActual[17] = nuevosDatos.valor_tonelada_final;
-  if (nuevosDatos.valor_anticipo_conductor !== undefined) filaActual[19] = nuevosDatos.valor_anticipo_conductor;
-  if (nuevosDatos.fecha_fin_viaje) filaActual[23] = nuevosDatos.fecha_fin_viaje;
-
-  // Gastos conductor
-  if (nuevosDatos.cant_peajes_conductor !== undefined) filaActual[24] = nuevosDatos.cant_peajes_conductor;
-  if (nuevosDatos.valor_total_peajes_conductor !== undefined) filaActual[25] = nuevosDatos.valor_total_peajes_conductor;
-  if (nuevosDatos.valor_cargue_conductor !== undefined) filaActual[26] = nuevosDatos.valor_cargue_conductor;
-  if (nuevosDatos.valor_descargue_conductor !== undefined) filaActual[27] = nuevosDatos.valor_descargue_conductor;
-  if (nuevosDatos.engrase_conductor !== undefined) filaActual[28] = nuevosDatos.engrase_conductor;
-  if (nuevosDatos.parqueadero_conductor !== undefined) filaActual[29] = nuevosDatos.parqueadero_conductor;
-  if (nuevosDatos.fumigacion_conductor !== undefined) filaActual[30] = nuevosDatos.fumigacion_conductor;
-  if (nuevosDatos.lavadas_conductor !== undefined) filaActual[31] = nuevosDatos.lavadas_conductor;
-  if (nuevosDatos.comision_despachador_conductor !== undefined) filaActual[32] = nuevosDatos.comision_despachador_conductor;
-  if (nuevosDatos.otro_conductor) filaActual[33] = nuevosDatos.otro_conductor;
-  if (nuevosDatos.valor_otro_conductor !== undefined) filaActual[34] = nuevosDatos.valor_otro_conductor;
-
-  // Gastos propietario
-  if (nuevosDatos.cant_peajes_propietario !== undefined) filaActual[35] = nuevosDatos.cant_peajes_propietario;
-  if (nuevosDatos.valor_total_peajes_propietario !== undefined) filaActual[36] = nuevosDatos.valor_total_peajes_propietario;
-  if (nuevosDatos.valor_cargue_propietario !== undefined) filaActual[37] = nuevosDatos.valor_cargue_propietario;
-  if (nuevosDatos.valor_descargue_propietario !== undefined) filaActual[38] = nuevosDatos.valor_descargue_propietario;
-  if (nuevosDatos.engrase_propietario !== undefined) filaActual[39] = nuevosDatos.engrase_propietario;
-  if (nuevosDatos.parqueadero_propietario !== undefined) filaActual[40] = nuevosDatos.parqueadero_propietario;
-  if (nuevosDatos.fumigacion_propietario !== undefined) filaActual[41] = nuevosDatos.fumigacion_propietario;
-  if (nuevosDatos.lavadas_propietario !== undefined) filaActual[42] = nuevosDatos.lavadas_propietario;
-  if (nuevosDatos.comision_despachador_propietario !== undefined) filaActual[43] = nuevosDatos.comision_despachador_propietario;
-  if (nuevosDatos.otro_propietario) filaActual[44] = nuevosDatos.otro_propietario;
-  if (nuevosDatos.valor_otro_propietario !== undefined) filaActual[45] = nuevosDatos.valor_otro_propietario;
-  if (nuevosDatos.url_descargue) filaActual[48] = nuevosDatos.url_descargue;
-
-  // ===== RECALCULAR TODOS LOS CAMPOS =====
-
-  // 1. Valor del viaje
-  const toneladas_descargue = parseFloat(filaActual[14]) || 0;
-  const valor_tonelada_final = parseFloat(filaActual[17]) || parseFloat(filaActual[16]) || 0;
-  const valor_viaje = toneladas_descargue * valor_tonelada_final;
-  filaActual[12] = valor_viaje;
-
-  // 2. Diferencia toneladas
-  const toneladas_inicio = parseFloat(filaActual[13]) || 0;
-  filaActual[15] = (toneladas_inicio - toneladas_descargue) * 1000;
-
-  // 3. Diez por ciento
-  const diez_pcto = valor_viaje * 0.10;
-  filaActual[18] = diez_pcto;
-
-  // 4. Total gastos conductor
-  const total_gastos_conductor = 
-    (parseFloat(filaActual[25]) || 0) + // valor_total_peajes_conductor
-    (parseFloat(filaActual[26]) || 0) + // valor_cargue_conductor
-    (parseFloat(filaActual[27]) || 0) + // valor_descargue_conductor
-    (parseFloat(filaActual[28]) || 0) + // engrase_conductor
-    (parseFloat(filaActual[29]) || 0) + // parqueadero_conductor
-    (parseFloat(filaActual[30]) || 0) + // fumigacion_conductor
-    (parseFloat(filaActual[31]) || 0) + // lavadas_conductor
-    (parseFloat(filaActual[32]) || 0) + // comision_despachador_conductor
-    (parseFloat(filaActual[34]) || 0);  // valor_otro_conductor
-  
-  filaActual[21] = total_gastos_conductor;
-
-  // 5. Saldo anticipo conductor
-  const valor_anticipo_conductor = parseFloat(filaActual[19]) || 0;
-  const saldo_anticipo_conductor = valor_anticipo_conductor - total_gastos_conductor;
-  filaActual[20] = saldo_anticipo_conductor;
-
-  // 6. Saldo pendiente conductor
-  filaActual[22] = diez_pcto - saldo_anticipo_conductor;
-
-  // 7. Total gastos propietario
-  const total_gastos_propietario = 
-    (parseFloat(filaActual[36]) || 0) + // valor_total_peajes_propietario
-    (parseFloat(filaActual[37]) || 0) + // valor_cargue_propietario
-    (parseFloat(filaActual[38]) || 0) + // valor_descargue_propietario
-    (parseFloat(filaActual[39]) || 0) + // engrase_propietario
-    (parseFloat(filaActual[40]) || 0) + // parqueadero_propietario
-    (parseFloat(filaActual[41]) || 0) + // fumigacion_propietario
-    (parseFloat(filaActual[42]) || 0) + // lavadas_propietario
-    (parseFloat(filaActual[43]) || 0) + // comision_despachador_propietario
-    (parseFloat(filaActual[45]) || 0);  // valor_otro_propietario
-  
-  filaActual[46] = total_gastos_propietario;
-
-  // 8. Buscar datos del cliente para descuentos (SOLO si hay anticipo cliente)
-  const valor_anticipo_cliente = parseFloat(filaActual[5]) || 0;
-  
-  if (valor_anticipo_cliente > 0) {
-    const codigoCliente = filaActual[2];
-    const clientes = await clienteHelper.getClientes();
-    const cliente = clientes.find(c => c.codigo === codigoCliente);
-
-    if (cliente) {
-      const rete_fuente = cliente.rete_fuente || 'no';
-      const rete_ica = parseFloat(cliente.rete_ica) || 0;
-
-      const saldo_pendiente_cliente_sin_descuento = valor_viaje - valor_anticipo_cliente;
-      const descuento_rete_fuente = rete_fuente.toLowerCase() === 'si' 
-        ? saldo_pendiente_cliente_sin_descuento * 0.01 
-        : 0;
-      const descuento_rete_ica = saldo_pendiente_cliente_sin_descuento * (rete_ica / 100);
-      const total_descuentos_cliente = descuento_rete_fuente + descuento_rete_ica;
-      const saldo_pendiente_cliente_real = saldo_pendiente_cliente_sin_descuento - total_descuentos_cliente;
-
-      filaActual[6] = saldo_pendiente_cliente_sin_descuento;
-      filaActual[7] = saldo_pendiente_cliente_real;
-      filaActual[8] = descuento_rete_fuente;
-      filaActual[9] = descuento_rete_ica;
-      filaActual[10] = total_descuentos_cliente;
-    }
-  }
-
-  // 9. Ganancia viaje
-  filaActual[46] = valor_viaje - diez_pcto - total_gastos_conductor - total_gastos_propietario;
-
-  // Guardar cambios
-  const filaEnHoja = filaIndex + 2;
-  await sheets.spreadsheets.values.update({
-    spreadsheetId,
-    range: `Viajes!A${filaEnHoja}:AN${filaEnHoja}`,
-    valueInputOption: 'RAW',
-    requestBody: { values: [filaActual] },
-  });
-
-  return true;
-};
-
-const facturarCliente = async (codigoCliente) => {
-  const viajes = await getTodosLosViajes();
-
-  const viajesCliente = viajes.filter(v =>
-    v.cliente === codigoCliente &&
-    v.estado_saldo_cliente === 'pendiente'
-  );
-
-  if (!viajesCliente.length) {
-    return { 
-      mensaje: 'No hay viajes pendientes de pago para este cliente', 
-      total_pendiente: 0 
-    };
-  }
-
-  const total_pendiente = viajesCliente.reduce((acc, v) => 
-    acc + (parseFloat(v.saldo_pendiente_cliente_real) || 0), 0
-  );
-
-  const clientes = await clienteHelper.getClientes();
-  const cliente = clientes.find(c => c.codigo === codigoCliente);
-
+  const cliente = await buscarCliente(codigoCliente);
   return {
     codigoCliente,
     nombre_empresa: cliente?.empresa || '',
     tipo_pago: cliente?.tipo_pago || '',
-    total_viajes: viajesCliente.length,
-    total_pendiente,
-    viajes: viajesCliente.map(v => ({
+    total_viajes: viajes.length,
+    total_pendiente: viajes.reduce((acc, v) => acc + aNumero(v.saldo_pendiente_cliente_real), 0),
+    viajes: viajes.map((v) => ({
       consecutivo: v.consecutivo,
       placa: v.placa,
       destino: v.destino,
       fecha_inicio: v.fecha_inicio,
       fecha_fin_viaje: v.fecha_fin_viaje,
-      valor_viaje_estimado: v.valor_viaje_estimado,
-      // valor_anticipo_cliente: v.valor_anticipo_cliente,
-      // saldo_pendiente_cliente_real: v.saldo_pendiente_cliente_real
-    }))
+      valor_viaje_real: v.valor_viaje_real,
+      saldo_pendiente_cliente_real: v.saldo_pendiente_cliente_real,
+      num_factura_cliente: v.num_factura_cliente,
+    })),
   };
-};
-
-const facturarViaje = async (consecutivo, valor_viaje_real, notas_facturacion, num_factura_cliente) => {
-
-  const sheets = getSheetsClient();
-
-  const response = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: 'Viajes!A2:AN1000',
-  });
-
-  const filas = response.data.values;
-  const filaIndex = filas.findIndex(f => f[0]?.toLowerCase() === consecutivo.toLowerCase());
-  if (filaIndex === -1) return null;
-
-  const filaActual = filas[filaIndex];
-
-  // Verificar que esté aprobado
-  if (filaActual[37] !== 'aprobado') { // AL
-    throw new Error('El viaje debe estar aprobado antes de facturar');
-  }
-
-  const valor_viaje_estimado = parseFloat(filaActual[12]) || 0; 
-  const diferencia_facturacion = valor_viaje_real - valor_viaje_estimado;
-
-  // Opción A: Recalcular 10% con valor real
-  const diez_pcto_nuevo = valor_viaje_real * 0.10;
-  const diez_pcto_anterior = parseFloat(filaActual[22]) || 0; 
-  const diferencia_diez_pcto = diez_pcto_nuevo - diez_pcto_anterior;
-
-  // Actualizar 10% del conductor
-  filaActual[22] = diez_pcto_nuevo; 
-
-  // Recalcular saldo pendiente conductor
-  const saldo_anticipo_conductor = parseFloat(filaActual[24]) || 0; 
-  const saldo_pendiente_conductor_nuevo = diez_pcto_nuevo - saldo_anticipo_conductor;
-  filaActual[26] = saldo_pendiente_conductor_nuevo; 
-
-  // Recalcular ganancia real del propietario
-  const total_gastos_conductor = parseFloat(filaActual[25]) || 0; 
-  const total_gastos_propietario = parseFloat(filaActual[28]) || 0; 
-  const ganancia_viaje_real = valor_viaje_real - diez_pcto_nuevo - total_gastos_conductor - total_gastos_propietario;
-
-  // Actualizar columnas
-  filaActual[13] = valor_viaje_real;           
-  filaActual[14] = diferencia_facturacion;     
-  filaActual[30] = ganancia_viaje_real;        
-  filaActual[15] = notas_facturacion || '';     
-  filaActual[16] = num_factura_cliente || '';   
-  filaActual[37] = 'facturado';                 
-
-  const filaEnHoja = filaIndex + 2;
-  await sheets.spreadsheets.values.update({
-    spreadsheetId,
-    range: `Viajes!A${filaEnHoja}:AN${filaEnHoja}`,
-    valueInputOption: 'RAW',
-    requestBody: { values: [filaActual] },
-  });
-
-  // Verificar si el viaje ya fue liquidado
-  const liquidado = filaActual[38] === 'si'; // AM
-
-  return { 
-    valor_viaje_real, 
-    diferencia_facturacion, 
-    ganancia_viaje_real,
-    diferencia_diez_pcto,
-    ya_liquidado: liquidado,
-    mensaje: liquidado 
-      ? `⚠️ Se aplicará ajuste de $${diferencia_diez_pcto.toFixed(2)} en la próxima nómina` 
-      : 'Cambios aplicados correctamente'
-  };
-};
-
-const crearCarpeta = async (nombreCarpeta, parentFolderId) => {
-  const drive = getDriveClient();
-  const fileMetadata = {
-    name: nombreCarpeta,
-    mimeType: 'application/vnd.google-apps.folder',
-    parents: parentFolderId ? [parentFolderId] : []
-  };
-  
-  const respuesta = await drive.files.create({
-    resource: fileMetadata,
-    fields: 'id, webViewLink'
-  });
-  
-  return respuesta.data;
-};
-
-const subirArchivo = async (archivo, carpetaId) => {
-  const drive = getDriveClient();
-  
-  const fileMetadata = {
-    name: archivo.originalname,
-    parents: [carpetaId]
-  };
-  
-  const bufferStream = new stream.PassThrough();
-  bufferStream.end(archivo.buffer);
-  
-  const media = {
-    mimeType: archivo.mimetype,
-    body: bufferStream
-  };
-  
-  const respuesta = await drive.files.create({
-    resource: fileMetadata,
-    media: media,
-    fields: 'id, webViewLink'
-  });
-  
-  return respuesta.data.webViewLink;
-};
-
-const buscarCarpetaPorNombre = async (nombreCarpeta, parentFolderId) => {
-  const drive = getDriveClient();
-  
-  let query = `name = '${nombreCarpeta}' and mimeType = 'application/vnd.google-apps.folder'`;
-  if (parentFolderId) {
-    query += ` and '${parentFolderId}' in parents`;
-  }
-  
-  const response = await drive.files.list({
-    q: query,
-    fields: 'files(id, name, webViewLink)',
-    spaces: 'drive'
-  });
-  
-  return response.data.files.length > 0 ? response.data.files[0] : null;
-};
-
-const procesarArchivosGastos = async (archivos, placa, consecutivo, quien) => {
-  if (!archivos || Object.keys(archivos).length === 0) {
-    console.log("No hay archivos");
-    return null;
-  }
-
-  let carpetaViaje = await buscarCarpetaPorNombre(consecutivo, carpetaPadreId);
-  if (!carpetaViaje) {
-    carpetaViaje = await crearCarpeta(consecutivo, carpetaPadreId);
-  }
-
-  const nombreSubcarpeta =
-    quien === 'conductor'
-      ? 'Gastos_Conductor'
-      : 'Gastos_Propietario';
-
-  let carpetaGastos = await buscarCarpetaPorNombre(nombreSubcarpeta, carpetaViaje.id);
-  if (!carpetaGastos) {
-    carpetaGastos = await crearCarpeta(nombreSubcarpeta, carpetaViaje.id);
-  }
-
-  for (const key in archivos) {
-  if (key.endsWith('_archivos')) {
-    const files = archivos[key];
-    for (const file of files) {
-      await subirArchivo(file, carpetaGastos.id);
-    }
-  }
-}
-
-  return carpetaGastos.webViewLink;
-};
-
-const subirManifiesto = async (archivo, consecutivo) => {
-  const drive = getDriveClient();
-  const carpetaPadreId = process.env.CARPETA_PADRE_ID_VIAJES;
-  
-  // Buscar o crear carpeta del viaje
-  let carpetaViaje = await buscarCarpetaPorNombre(consecutivo, carpetaPadreId);
-  if (!carpetaViaje) {
-    carpetaViaje = await crearCarpeta(consecutivo, carpetaPadreId);
-  }
-  
-  // Subir archivo directamente a la carpeta del viaje (no en subcarpeta)
-  const enlace = await subirArchivo(archivo, carpetaViaje.id);
-  
-  return enlace;
-};
-
-const contarViajesPorPlaca = async (placa) => {
-  const sheets = getSheetsClient();
-  const response = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: 'Viajes!B:B', // columna B es la placa
-  });
-
-  const filas = response.data.values || [];
-  // fila 0 es el encabezado, filtramos por placa
-  return filas.slice(1).filter(fila => 
-    fila[0] && fila[0].toString().toLowerCase() === placa.toLowerCase()
-  ).length;
-};
-
-const actualizarContadoresViaje = async (consecutivo) => {
-  const sheets = getSheetsClient();
-
-  // 1. Obtener datos del viaje
-  const responseViajes = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: 'Viajes!A2:AM1000',
-  });
-  const filas = responseViajes.data.values;
-  const viaje = filas.find(f => f[0]?.toLowerCase() === consecutivo.toLowerCase());
-  
-  if (!viaje) return;
-
-  const placa = viaje[1]; // Columna B
-  const codigoCliente = viaje[2]; // Columna C
-  const correoUsuario = viaje[34]; // Columna AI (correo_usuario)
-
-  // 2. Actualizar CLIENTES
-  const responseClientes = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: 'Clientes!A1:N100',
-  });
-  const filasClientes = responseClientes.data.values;
-  const headersClientes = filasClientes[0].map(h => h.trim().toLowerCase());
-  const indiceCodigoCliente = headersClientes.indexOf('codigo');
-  const indiceViajesCliente = headersClientes.indexOf('viajes');
-
-  const filaClienteIndex = filasClientes.slice(1).findIndex(f => f[indiceCodigoCliente] === codigoCliente);
-  if (filaClienteIndex !== -1) {
-    const filaCliente = filasClientes[filaClienteIndex + 1];
-    const viajesActuales = parseInt(filaCliente[indiceViajesCliente] || 0);
-    filaCliente[indiceViajesCliente] = viajesActuales + 1;
-    
-    await sheets.spreadsheets.values.update({
-      spreadsheetId,
-      range: `Clientes!A${filaClienteIndex + 2}:N${filaClienteIndex + 2}`,
-      valueInputOption: 'RAW',
-      requestBody: { values: [filaCliente] },
-    });
-  }
-
-  // 3. Actualizar VEHICULOS
-  const responseVehiculos = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: 'Vehiculos!A1:AC100',
-  });
-  const filasVehiculos = responseVehiculos.data.values;
-  const headersVehiculos = filasVehiculos[0].map(h => h.trim().toLowerCase());
-  const indicePlacaVehiculo = headersVehiculos.indexOf('placa');
-  const indiceViajesVehiculo = headersVehiculos.indexOf('viajes');
-
-  const filaVehiculoIndex = filasVehiculos.slice(1).findIndex(f => f[indicePlacaVehiculo] === placa);
-  if (filaVehiculoIndex !== -1) {
-    const filaVehiculo = filasVehiculos[filaVehiculoIndex + 1];
-    const viajesActuales = parseInt(filaVehiculo[indiceViajesVehiculo] || 0);
-    filaVehiculo[indiceViajesVehiculo] = viajesActuales + 1;
-    
-    await sheets.spreadsheets.values.update({
-      spreadsheetId,
-      range: `Vehiculos!A${filaVehiculoIndex + 2}:AC${filaVehiculoIndex + 2}`,
-      valueInputOption: 'RAW',
-      requestBody: { values: [filaVehiculo] },
-    });
-  }
-
-  // 4. Actualizar USUARIOS
-  const responseUsuarios = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: 'Usuarios!A1:AB15',
-  });
-  const filasUsuarios = responseUsuarios.data.values;
-  const headersUsuarios = filasUsuarios[0].map(h => h.trim().toLowerCase());
-  const indiceEmailUsuario = headersUsuarios.indexOf('email');
-  const indiceViajesRealizados = headersUsuarios.indexOf('viajes_realizados');
-
-  const filaUsuarioIndex = filasUsuarios.slice(1).findIndex(f => f[indiceEmailUsuario] === correoUsuario);
-  if (filaUsuarioIndex !== -1) {
-    const filaUsuario = filasUsuarios[filaUsuarioIndex + 1];
-    const viajesActuales = parseInt(filaUsuario[indiceViajesRealizados] || 0);
-    filaUsuario[indiceViajesRealizados] = viajesActuales + 1;
-    
-    await sheets.spreadsheets.values.update({
-      spreadsheetId,
-      range: `Usuarios!A${filaUsuarioIndex + 2}:AB${filaUsuarioIndex + 2}`,
-      valueInputOption: 'RAW',
-      requestBody: { values: [filaUsuario] },
-    });
-  }
 };
 
 export const viajeHelper = {
-  getViajes,
+  // flujo
+  crearViaje,
+  consignarAnticipo,
+  validarViajeParaPreoperacional,
+  registrarPreoperacional,
+  cerrarViaje,
+  aprobarViaje,
+  facturarViaje,
+  registrarPagoCliente,
+  editarViaje,
+  legalizarFactura,
+  marcarViajesLiquidados,
+  aplicarAjustes,
+  pendientesConductor,
+  // consultas
+  listarViajes,
+  obtenerViaje,
+  obtenerGastosViaje,
   getTodosLosViajes,
   getResumenViajesPorPlaca,
-  guardarAnticipo,
-  getSiguienteConsecutivo,  
   getViajesByConsecutivo,
-  getViajesOrdenadosPorAnticipoConductor,
-  getViajesOrdenadosPorDiezPcto,
-  getViajesOrdenadosPorFechaFin,
-  getViajesOrdenadosPorFechaInicio,
-  getViajesOrdenadosPorGananciaEstimada,
-  getViajesOrdenadosPorGananciaReal,
-  getViajesOrdenadosPorGastosConductor,
-  getViajesOrdenadosPorGastosPropietario,
-  getViajesOrdenadosPorValorToneladaFinal,
-  getViajesOrdenadosPorValorToneladaInicial,
-  getViajesOrdenadosPorValorViajeReal,
-  getViajesPorEstadoSaldoCliente,
-  getViajesPorEstadoViaje,
-  editarViajePorConsecutivo,
-  buscarCarpetaPorNombre,
-  completarSaldoCliente,
-  cerrarViajeYGastosConductor,
+  ordenarViajes,
+  filtrarViajes,
   facturarCliente,
-  aprobarViajeYGastosPropietario,
-  facturarViaje,
-  subirManifiesto,
-  contarViajesPorPlaca,
-  actualizarContadoresViaje
+  // utilidades
+  agruparArchivos,
+  puedeVerViaje,
 };

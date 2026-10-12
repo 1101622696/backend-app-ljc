@@ -1,186 +1,91 @@
 import { prestamoHelper } from '../helpers/prestamos.js';
-import { firebaseHelper } from '../helpers/firebase.js';
 import { usuarioHelper } from '../helpers/usuarios.js';
+import { firebaseHelper } from '../helpers/firebase.js';
+import { responderError } from '../helpers/errores.js';
+
+const peso = (n) => `$${Math.round(Number(n) || 0).toLocaleString('es-CO')}`;
+
+const notificar = (correos, titulo, mensaje, consecutivo) => {
+  [...new Set(correos.filter(Boolean))].forEach((correo) =>
+    firebaseHelper
+      .enviarNotificacion(correo, titulo, mensaje, { tipo: 'prestamo', consecutivo })
+      .catch((e) => console.warn('[prestamos] Notificación no enviada:', e.message))
+  );
+};
 
 const httpPrestamos = {
-
-crearPrestamo: async (req, res) => {
-  try {
-    const { email, nombre } = req.usuariobdtoken;
-    const { valor_pedido} = req.body;
-
-    const fecha_creacion = new Date().toISOString().split('T')[0];
-    const estado_prestamo = "pendiente";
-    const valor_prestado = 0;
-    let Link = null;
-    let consecutivo;
-
-    if (req.files && req.files.length > 0) {
-      consecutivo = await prestamoHelper.getSiguienteConsecutivo();
-      Link = await prestamoHelper.procesarArchivos(req.files, consecutivo);
-
-    const resultado = await prestamoHelper.guardarPrestamo({ 
-      valor_pedido,
-      valor_prestado,
-      correo_usuario: email, 
-      usuario: nombre, 
-      fecha_creacion,
-      estado_prestamo, 
-      Link
-    });
-       
-    consecutivo = resultado.consecutivo;
-
-    res.status(200).json({ 
-      mensaje: 'Prestamo solicitado correctamente', 
-      consecutivo: resultado.consecutivo, 
-    });
-   
-  } else {
-    const resultado = await prestamoHelper.guardarPrestamo({ 
-      valor_pedido,
-      valor_prestado,
-      correo_usuario: email, 
-      usuario: nombre, 
-      fecha_creacion,
-      estado_prestamo,
-      Link: null, 
-    });
-      
-    
-    consecutivo = resultado.consecutivo;
-      
-      res.status(200).json({ 
-        mensaje: 'Prestamo solicitado correctamente', 
-        consecutivo: resultado.consecutivo, 
-      });
-  
-const usuarios = await usuarioHelper.getUsuarios()
-const admins = usuarios.filter(u => u.perfil === 'administrador')
-
-for (const admin of admins) {
-  await firebaseHelper.enviarNotificacion(
-    admin.email,
-    'Nueva solicitud de préstamo',
-    `${nombre} ha solicitado un préstamo de $${valor_pedido}, consecutivo: #${resultado.consecutivo}`,
-    { tipo: 'prestamo', consecutivo: resultado.consecutivo }
-  )
-}
-    }
-
-  } catch (error) { 
-    console.error('Error al guardar el Prestamo:', error); 
-    res.status(500).json({ mensaje: 'Error interno del servidor' }); 
-  } 
-},
-
-obtenerPrestamos: async (req, res) => {
+  /** Lista visible para el usuario. ?estado= */
+  listar: async (req, res) => {
     try {
-      const data = await prestamoHelper.getPrestamos();
-      res.json(data);
-      
+      res.json(await prestamoHelper.listar(req.usuariobdtoken, { estado: req.query.estado || '' }));
     } catch (error) {
-      console.error('Error al obtener datos:', error);
-      res.status(500).json({ mensaje: 'Error al obtener prestamos' });
+      responderError(res, error, 'Error al listar préstamos');
     }
-},
+  },
 
-obtenerResumenSolicitante: async (req, res) => {
-  try {
-    // const { email } = req.params;
-    const email = req.usuariobdtoken.email;
-    
-    if (!email) {
-      return res.status(400).json({
-        ok: false,
-        mensaje: 'Email es requerido'
-      });
+  obtenerPrestamoPorConsecutivo: async (req, res) => {
+    try {
+      res.json(await prestamoHelper.obtener(req.usuariobdtoken, req.params.consecutivo));
+    } catch (error) {
+      responderError(res, error, 'Error al obtener préstamo');
     }
+  },
 
-    const resumen = await prestamoHelper.getResumenPrestamosPorSolicitante(email);
-    
-    res.json({
-      ok: true,
-      resumen,
-      email,
-      mensaje: 'Resumen obtenido exitosamente'
-    });
-  } catch (error) {
-    console.error('Error al obtener resumen por email:', error);
-    res.status(500).json({
-      ok: false,
-      mensaje: 'Error interno del servidor',
-      error: error.message
-    });
-  }
-},
+  crearPrestamo: async (req, res) => {
+    try {
+      const usuario = req.usuariobdtoken;
+      const p = await prestamoHelper.solicitar(usuario, req.body);
+      res.status(201).json({ mensaje: `Préstamo ${p.consecutivo} solicitado`, consecutivo: p.consecutivo });
 
-obtenerResumenPropietario: async (req, res) => {
-  try {
-    const placasPropietario = req.usuariobdtoken.placa_asignada
-    
-    if (!placasPropietario) {
-      return res.status(400).json({
-        ok: false,
-        mensaje: 'El propietario no tiene placas asignadas'
-      })
+      // Propietario(s) de sus placas + administradores
+      const destinatarios = new Set();
+      for (const placa of p.placas) {
+        (await usuarioHelper.obtenerDestinatariosNotificacion(placa)).forEach((c) => destinatarios.add(c));
+      }
+      if (!p.placas.length) {
+        (await usuarioHelper.getUsuarioPorPerfil('administrador')).forEach((a) => destinatarios.add(a.email));
+      }
+      destinatarios.delete(usuario.email);
+      notificar(
+        [...destinatarios],
+        'Solicitud de préstamo',
+        `${p.usuario} pide un préstamo de ${peso(p.valor_pedido)}${p.motivo ? ` (${p.motivo})` : ''}.`,
+        p.consecutivo
+      );
+    } catch (error) {
+      responderError(res, error, 'Error al solicitar préstamo');
     }
+  },
 
-    const resumen = await prestamoHelper.getResumenPrestamosPorPropietario(placasPropietario)
-    res.json({
-      ok: true,
-      resumen,
-      mensaje: 'Resumen obtenido exitosamente'
-    })
-  } catch (error) {
-    console.error(error)
-    res.status(500).json({
-      ok: false,
-      mensaje: 'Error interno del servidor',
-      error: error.message
-    })
-  }
-},
-
-obtenerPrestamoPorConsecutivo: async (req, res) => {
-  try {
-    const { consecutivo } = req.params;
-    const prestamo = await prestamoHelper.getPrestamoByConsecutivo(consecutivo);
-
-    if (!prestamo) {
-      return res.status(404).json({ mensaje: 'Prestamo no encontrado' });
+  desembolsar: async (req, res) => {
+    try {
+      const p = await prestamoHelper.desembolsar(req.usuariobdtoken, req.params.consecutivo, req.body, req.files || []);
+      res.json({ mensaje: 'Desembolso registrado. Se descontará en la próxima nómina de salario.' });
+      notificar(
+        [p.correo_usuario],
+        'Préstamo desembolsado',
+        `Le consignaron ${peso(p.valor_prestado)} del préstamo ${p.consecutivo}. Se descuenta de su salario.`,
+        p.consecutivo
+      );
+    } catch (error) {
+      responderError(res, error, 'Error al desembolsar préstamo');
     }
+  },
 
-    res.json(prestamo);
-  } catch (error) {
-    console.error('Error al obtener prestamo:', error);
-    res.status(500).json({ mensaje: 'Error al obtener prestamo' });
-  }
-},
-
-editarPrestamo: async (req, res) => {
-  try {
-    const { consecutivo } = req.params;
-    const nuevosDatos = req.body;
-    
-    if (req.files && req.files.length > 0) {
-      const Link = await prestamoHelper.procesarArchivos(req.files, consecutivo);
-      nuevosDatos.Link = Link;
+  rechazar: async (req, res) => {
+    try {
+      const p = await prestamoHelper.rechazar(req.usuariobdtoken, req.params.consecutivo, req.body);
+      res.json({ mensaje: 'Préstamo rechazado' });
+      notificar(
+        [p.correo_usuario],
+        'Préstamo no aprobado',
+        `Su préstamo ${p.consecutivo} no fue aprobado${p.motivo_rechazo ? `: ${p.motivo_rechazo}` : ''}.`,
+        p.consecutivo
+      );
+    } catch (error) {
+      responderError(res, error, 'Error al rechazar préstamo');
     }
-
-    const resultado = await prestamoHelper.editarPrestamoporConsecutivo(consecutivo, nuevosDatos);
-
-    if (!resultado) {
-      return res.status(404).json({ mensaje: 'Prestamo no encontrado' });
-    }
-
-    res.status(200).json({ mensaje: 'Prestamo actualizado correctamente' });
-  } catch (error) {
-    console.error('Error al editar Prestamo:', error);
-    res.status(500).json({ mensaje: 'Error interno del servidor' });
-  }
-},
-
-}
+  },
+};
 
 export default httpPrestamos;

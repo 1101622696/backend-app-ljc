@@ -1,309 +1,411 @@
-import stream from 'stream';
-import { getDriveClient, getSheetsClient } from '../services/google.js';
+import { leerHoja, agregarFila, actualizarCampos, siguienteConsecutivo, conCandado, aNumero } from './hoja.js';
+import { hoy, aFechaISO, parsearFecha } from './fechas.js';
+import { obtenerCarpeta, subirArchivos, linkCarpeta } from './carpetas.js';
+import { libroGastos } from './libro_gastos.js';
+import { ErrorApp } from './errores.js';
+import { puedeVerPlaca } from '../middlewares/validar-rol.js';
 
-const spreadsheetId = process.env.SPREADSHEET_ID;
-const carpetaPadreId = process.env.CARPETA_PADRE_ID_MANTENIMIENTOS;
+// ─────────────────────────────────────────────────────────────
+// Hoja "Mantenimientos". Se lee y escribe por NOMBRE de columna.
+// Encabezados: consecutivo | placa | tipo_mantenimiento | descripcion | valor_mantenimiento |
+//   odometro | correo_usuario | usuario | fecha_creacion | link |
+//   estado_factura | numero_factura | link_factura   ← columnas NUEVAS (al final)
+// Cada mantenimiento queda también como gasto del vehículo (Gastos_Vehiculos, tipo 'mantenimiento').
+// ─────────────────────────────────────────────────────────────
 
-const obtenerDatosMantenimiento = async () => {
-  const sheets = getSheetsClient();
-  
-  const range = 'Mantenimientos!A1:J100'; 
+const HOJA = 'Mantenimientos';
+const TIPO_GASTO = 'mantenimiento';
+const carpetaPadreId = () => process.env.CARPETA_PADRE_ID_MANTENIMIENTOS;
 
-  const res = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range,
-  });
+const texto = (v) => String(v ?? '').trim();
+const normalizarPlaca = (v) => texto(v).toUpperCase().replace(/\s+/g, '');
+const minuscula = (v) => texto(v).toLowerCase();
+const mismoConsecutivo = (a, b) => minuscula(a) === minuscula(b);
 
-  const rows = res.data.values;
-  if (!rows || rows.length === 0) return [];
+/** 831340 → '831.340' (formato colombiano para mensajes) */
+export const formatoMiles = (n) => String(Math.round(aNumero(n))).replace(/\B(?=(\d{3})+(?!\d))/g, '.');
 
-  const headers = rows[0].map(h => h.trim().toLowerCase());
-  return rows.slice(1).map(row =>
-    Object.fromEntries(row.map((val, i) => [headers[i], val]))
-  );
+/** Si viene con hora se conserva tal cual; si no, 'AAAA-MM-DD'. Inválida → texto original */
+const normalizarFecha = (v) => {
+  const t = texto(v);
+  if (!t) return '';
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(t)) return t;
+  return aFechaISO(v) || t;
 };
 
-const getMantenimientos = () => obtenerDatosMantenimiento();
-
-const getResumenMantenimientosPorPlaca = async (placas) => {
-  try {
-    const todoslosMantenimientos = await getMantenimientos()
-
-    // convertir a array si llega una sola placa
-    const placasArray = Array.isArray(placas)
-      ? placas
-      : [placas]
-
-    const placasUpper = placasArray.map(p =>
-      p.trim().toUpperCase()
-    )
-
-    const mantenimientosFiltrados =
-      todoslosMantenimientos.filter(p =>
-        placasUpper.includes(
-          p.placa?.trim().toUpperCase()
-        )
-      )
-
-    const mapConDatos = (lista) => {
-
-      return lista.map(r => ({
-
-        consecutivo: r.consecutivo || '',
-        placa: r.placa || '',
-        tipo_mantenimiento: r.tipo_mantenimiento || '',
-        valor_mantenimiento: r.valor_mantenimiento || '',
-        odometro: r.odometro || '',
-        fecha_creacion: r.fecha_creacion || '',
-      }))
-    }
-    return {
-      total: {
-        count: mantenimientosFiltrados.length,
-        consecutivos: mapConDatos(mantenimientosFiltrados)
-      }
-    }
-  } catch (error) {
-    console.error('Error al obtener resumen de mantenimientos por placa:', error);
-    throw error;
-  }
+/** El estado guardado manda; si la celda está vacía (filas viejas) se deduce de los datos */
+const calcularEstado = (fila) => {
+  const guardado = minuscula(fila.estado_factura);
+  if (guardado) return guardado;
+  return texto(fila.numero_factura) && texto(fila.link_factura) ? 'legalizado' : 'pendiente';
 };
 
-const getSiguienteConsecutivo = async () => {
-  const mantenimientos = await getMantenimientos();
-  
-  if (!mantenimientos.length) return "M-1";
+const normalizar = (fila) => ({
+  ...fila,
+  consecutivo: texto(fila.consecutivo),
+  placa: normalizarPlaca(fila.placa),
+  tipo_mantenimiento: minuscula(fila.tipo_mantenimiento),
+  descripcion: texto(fila.descripcion),
+  valor_mantenimiento: aNumero(fila.valor_mantenimiento),
+  odometro: texto(fila.odometro) === '' ? '' : aNumero(fila.odometro),
+  correo_usuario: minuscula(fila.correo_usuario),
+  usuario: texto(fila.usuario),
+  fecha_creacion: normalizarFecha(fila.fecha_creacion),
+  link: texto(fila.link),
+  estado_factura: calcularEstado(fila),
+  numero_factura: texto(fila.numero_factura),
+  link_factura: texto(fila.link_factura),
+});
 
-  const maxNumero = Math.max(
-    ...mantenimientos.map((m) => parseInt(m.consecutivo?.split('-')[1], 10) || 0)
-  );
-  
-  return `M-${maxNumero + 1}`;
+/** Quita _fila (dato interno) antes de responder */
+const publico = ({ _fila, ...resto }) => resto;
+
+const leerMantenimientos = async () => {
+  const { encabezados, filas } = await leerHoja(HOJA);
+  return { encabezados, filas: filas.map(normalizar) };
 };
 
-const guardarMantenimiento = async ({ placa, tipo_mantenimiento, descripcion, valor_mantenimiento, odometro, correo_usuario, usuario, fecha_creacion, Link}) => {
-  const sheets = getSheetsClient();
-  const consecutivo = await getSiguienteConsecutivo();
- 
-  const nuevaFila = [consecutivo, placa, tipo_mantenimiento, descripcion, valor_mantenimiento, odometro, correo_usuario , usuario , fecha_creacion, Link];
+/** Si llega el usuario de la sesión, deja solo las placas que puede ver */
+const filtrarPorUsuario = (lista, usuario) => (usuario ? lista.filter((m) => puedeVerPlaca(usuario, m.placa)) : lista);
 
-  await sheets.spreadsheets.values.append({
-    spreadsheetId,
-    range: 'Mantenimientos!A1',
-    valueInputOption: 'RAW',
-    insertDataOption: 'INSERT_ROWS',
-    requestBody: { values: [nuevaFila] },
-  });
+// ── Consultas ──
 
-  return { consecutivo };
+const getMantenimientos = async (usuario = null) => {
+  const { filas } = await leerMantenimientos();
+  return filtrarPorUsuario(filas.map(publico), usuario);
 };
 
 const getMantenimientosByConsecutivo = async (consecutivo) => {
-  const mantenimientos = await getMantenimientos();
-  return mantenimientos.find(mantenimiento => 
-    mantenimiento.consecutivo && mantenimiento.consecutivo.toLowerCase() === consecutivo.toLowerCase()
-  );
+  const { filas } = await leerMantenimientos();
+  const fila = filas.find((m) => m.consecutivo && mismoConsecutivo(m.consecutivo, consecutivo));
+  return fila ? publico(fila) : undefined;
 };
 
-const filtrarMantenimientosPorCampoTexto = (mantenimientos, campo, valor) => {
-  return mantenimientos.filter(mantenimiento => 
-    mantenimiento[campo] && mantenimiento[campo].toLowerCase() === valor.toLowerCase()
-  );
-};
+const getResumenMantenimientosPorPlaca = async (placas) => {
+  const lista = (Array.isArray(placas) ? placas : String(placas ?? '').split(','))
+    .map(normalizarPlaca)
+    .filter(Boolean);
 
-const ordenarMantenimientosPorCampoNumerico = (mantenimientos, campo, orden = 'desc') => {
-  return mantenimientos.sort((a, b) => {
-    const valorA = parseFloat(a[campo]) || 0;
-    const valorB = parseFloat(b[campo]) || 0;
-    
-    return orden.toLowerCase() === 'desc' ? valorB - valorA : valorA - valorB;
-  });
-};
+  const filtrados = (await getMantenimientos()).filter((m) => lista.includes(m.placa));
 
-const getMantenimientosPorTipo = async (valor) => {
-  const mantenimientos = await getMantenimientos();
-  return filtrarMantenimientosPorCampoTexto(mantenimientos, 'tipo_mantenimiento', valor);
-};
-
-const getMantenimientosOrdenadosPorFechaRegistro = async (orden = 'desc') => {
-  const mantenimientos = await getMantenimientos();
-  
-  return mantenimientos.sort((a, b) => {
-    const fechaA = new Date(a.fecha_creacion || 0);
-    const fechaB = new Date(b.fecha_creacion || 0);
-    
-    return orden.toLowerCase() === 'desc' ? fechaB - fechaA : fechaA - fechaB;
-  });
-};
-
-const getMantenimientosPorPlaca = async (valor) => {
-  const mantenimientos = await getMantenimientos();
-  return filtrarMantenimientosPorCampoTexto(mantenimientos, 'placa', valor);
-};
-
-const getMantenimientosOrdenadosPorValor = async (orden = 'desc') => {
-  const mantenimientos = await getMantenimientos();
-  return ordenarMantenimientosPorCampoNumerico(mantenimientos, 'valor_mantenimiento', orden);
-};
-
-const editarMantenimientoporConsecutivo = async (consecutivo, nuevosDatos) => {
-  const sheets = getSheetsClient();
-
-  const response = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: 'Mantenimientos!A2:J1000', 
-  });
-
-  const filas = response.data.values;
-  const filaIndex = filas.findIndex(fila => fila[0]?.toLowerCase() === consecutivo.toLowerCase());
-
-  if (filaIndex === -1) {
-    return null; 
-  }
-
-  // teer los datos actuales
-  const filaActual = filas[filaIndex];
-  
-  const filaEditada = [
-  filaActual[0], 
-  nuevosDatos.placa || filaActual[1],
-  nuevosDatos.tipo_mantenimiento || filaActual[2],
-  nuevosDatos.descripcion || filaActual[3],
-  nuevosDatos.valor_mantenimiento || filaActual[4],
-  nuevosDatos.odometro || filaActual[5],
-  filaActual[6], 
-  filaActual[7], 
-  filaActual[8], 
-  nuevosDatos.Link || filaActual[9],
-];
-
-  const filaEnHoja = filaIndex + 2; 
-
-  await sheets.spreadsheets.values.update({
-    spreadsheetId,
-    range: `Mantenimientos!A${filaEnHoja}:J${filaEnHoja}`,
-    valueInputOption: 'RAW',
-    requestBody: {
-      values: [filaEditada],
+  return {
+    total: {
+      count: filtrados.length,
+      valor: filtrados.reduce((suma, m) => suma + m.valor_mantenimiento, 0),
+      pendientes_factura: filtrados.filter((m) => m.estado_factura !== 'legalizado').length,
+      consecutivos: filtrados.map((m) => ({
+        consecutivo: m.consecutivo,
+        placa: m.placa,
+        tipo_mantenimiento: m.tipo_mantenimiento,
+        descripcion: m.descripcion,
+        valor_mantenimiento: m.valor_mantenimiento,
+        odometro: m.odometro,
+        fecha_creacion: m.fecha_creacion,
+        estado_factura: m.estado_factura,
+        numero_factura: m.numero_factura,
+        link: m.link,
+        link_factura: m.link_factura,
+      })),
     },
-  });
-
-  return true;
+  };
 };
 
-const crearCarpeta = async (nombreCarpeta, parentFolderId) => {
-  const drive = getDriveClient();
-  
-  const fileMetadata = {
-    name: nombreCarpeta,
-    mimeType: 'application/vnd.google-apps.folder',
-    parents: parentFolderId ? [parentFolderId] : []
-  };
-  
-  const respuesta = await drive.files.create({
-    resource: fileMetadata,
-    fields: 'id, webViewLink'
+/** Compara sin importar mayúsculas ni espacios (el formulario guardaba 'Correctivo') */
+const filtrarMantenimientosPorCampoTexto = (mantenimientos, campo, valor) => {
+  const buscado = campo === 'placa' ? normalizarPlaca(valor) : minuscula(valor);
+  return mantenimientos.filter((m) => {
+    const actual = campo === 'placa' ? normalizarPlaca(m[campo]) : minuscula(m[campo]);
+    return actual !== '' && actual === buscado;
   });
-  
-  return respuesta.data;
 };
 
-const subirArchivo = async (archivo, carpetaId) => {
-  const drive = getDriveClient();
-  
-  const fileMetadata = {
-    name: archivo.originalname,
-    parents: [carpetaId]
-  };
-  
-  const bufferStream = new stream.PassThrough();
-  bufferStream.end(archivo.buffer);
-  
-  const media = {
-    mimeType: archivo.mimetype,
-    body: bufferStream
-  };
-  
-  const respuesta = await drive.files.create({
-    resource: fileMetadata,
-    media: media,
-    fields: 'id, webViewLink'
+const direccion = (orden) => (minuscula(orden) === 'asc' ? 1 : -1);
+
+const ordenarMantenimientosPorCampoNumerico = (mantenimientos, campo, orden = 'desc') =>
+  [...mantenimientos].sort((a, b) => (aNumero(a[campo]) - aNumero(b[campo])) * direccion(orden));
+
+const getMantenimientosPorTipo = async (valor, usuario = null) =>
+  filtrarMantenimientosPorCampoTexto(await getMantenimientos(usuario), 'tipo_mantenimiento', valor);
+
+const getMantenimientosPorPlaca = async (valor, usuario = null) =>
+  filtrarMantenimientosPorCampoTexto(await getMantenimientos(usuario), 'placa', valor);
+
+const getMantenimientosPorEstadoFactura = async (valor, usuario = null) =>
+  filtrarMantenimientosPorCampoTexto(await getMantenimientos(usuario), 'estado_factura', valor);
+
+const getMantenimientosOrdenadosPorValor = async (orden = 'desc', usuario = null) =>
+  ordenarMantenimientosPorCampoNumerico(await getMantenimientos(usuario), 'valor_mantenimiento', orden);
+
+/** Fechas reales (no texto); las que no se pueden leer quedan al final */
+const getMantenimientosOrdenadosPorFechaRegistro = async (orden = 'desc', usuario = null) => {
+  const lista = await getMantenimientos(usuario);
+  const ms = (m) => parsearFecha(m.fecha_creacion)?.getTime() ?? null;
+  return [...lista].sort((a, b) => {
+    const fa = ms(a);
+    const fb = ms(b);
+    if (fa === null && fb === null) return 0;
+    if (fa === null) return 1;
+    if (fb === null) return -1;
+    return (fa - fb) * direccion(orden);
   });
-  
-  return respuesta.data.webViewLink;
 };
 
+/** Solo informativo: el consecutivo real se asigna al guardar (dentro del candado) */
+const getSiguienteConsecutivo = async () => {
+  const { filas } = await leerHoja(HOJA);
+  return siguienteConsecutivo(filas, 'consecutivo', 'M');
+};
+
+// ── Validaciones de datos ──
+
+/** Valor > 0. Lanza ErrorApp con mensaje para el usuario */
+export const validarValor = (valor) => {
+  const numero = aNumero(valor);
+  if (!(numero > 0)) throw new ErrorApp(400, 'El valor del mantenimiento debe ser mayor a cero');
+  return numero;
+};
+
+/** Odómetro opcional: '' si no viene; número ≥ 0 si viene */
+export const leerOdometro = (valor) => {
+  if (texto(valor) === '') return '';
+  const numero = aNumero(valor);
+  if (!(numero > 0)) throw new ErrorApp(400, 'El odómetro debe ser un número mayor a cero');
+  return Math.round(numero);
+};
+
+// ── Drive ──
+
+const carpetaDe = (consecutivo) => obtenerCarpeta(consecutivo, carpetaPadreId());
+
+/** Sube archivos a la carpeta del consecutivo. Devuelve { carpeta, subidos } */
+const guardarArchivos = async (archivos, consecutivo, prefijo = '') => {
+  if (!archivos?.length) return { carpeta: null, subidos: [] };
+  const carpeta = await carpetaDe(consecutivo);
+  const subidos = await subirArchivos(archivos, carpeta.id, prefijo);
+  return { carpeta, subidos };
+};
+
+// ── Libro de gastos ──
+
+const registrarGasto = (m) =>
+  libroGastos.registrarOActualizar({
+    placa: m.placa,
+    tipo_gasto: TIPO_GASTO,
+    codigo_referencia: m.consecutivo,
+    valor_gasto: m.valor_mantenimiento,
+    descripcion: `Mantenimiento ${m.tipo_mantenimiento}${m.descripcion ? `: ${m.descripcion}` : ''}`,
+    fecha_registro: aFechaISO(m.fecha_creacion) || hoy(),
+    link_soporte: m.link || '',
+  });
+
+// ── Escritura ──
+
+/**
+ * Guarda el mantenimiento. El consecutivo se calcula UNA vez dentro del candado y es el mismo
+ * que nombra la carpeta de Drive. Si llegan numero_factura y archivos, queda 'legalizado'.
+ * Devuelve { consecutivo, estado_factura, link, link_factura, gasto_registrado }
+ */
+const guardarMantenimiento = async ({
+  placa, tipo_mantenimiento, descripcion, valor_mantenimiento, odometro,
+  correo_usuario, usuario, fecha_creacion, numero_factura, archivos, Link,
+}) => {
+  const registro = await conCandado(HOJA, async () => {
+    const { encabezados, filas } = await leerHoja(HOJA);
+    const consecutivo = siguienteConsecutivo(filas, 'consecutivo', 'M');
+
+    const { carpeta } = await guardarArchivos(archivos, consecutivo);
+    const link = carpeta?.link || texto(Link);
+    const factura = texto(numero_factura);
+    const conFactura = Boolean(factura && carpeta);
+
+    const fila = {
+      consecutivo,
+      placa: normalizarPlaca(placa),
+      tipo_mantenimiento: minuscula(tipo_mantenimiento),
+      descripcion: texto(descripcion),
+      valor_mantenimiento: aNumero(valor_mantenimiento),
+      odometro: odometro === '' || odometro === undefined || odometro === null ? '' : aNumero(odometro),
+      correo_usuario: minuscula(correo_usuario),
+      usuario: texto(usuario),
+      fecha_creacion: fecha_creacion || hoy(),
+      link,
+      estado_factura: conFactura ? 'legalizado' : 'pendiente',
+      numero_factura: factura,
+      // Al crear no se distingue cuál archivo es la factura: se enlaza la carpeta del mantenimiento
+      link_factura: conFactura ? carpeta.link : '',
+    };
+
+    await agregarFila(HOJA, encabezados, fila);
+    return fila;
+  });
+
+  // El mantenimiento ya quedó guardado; si el libro de gastos falla se avisa sin perder el registro
+  let gasto_registrado = true;
+  try {
+    await registrarGasto(registro);
+  } catch (error) {
+    gasto_registrado = false;
+    console.error(`[mantenimientos] No se pudo registrar el gasto de ${registro.consecutivo}:`, error);
+  }
+
+  return {
+    consecutivo: registro.consecutivo,
+    estado_factura: registro.estado_factura,
+    link: registro.link,
+    link_factura: registro.link_factura,
+    gasto_registrado,
+  };
+};
+
+/** Busca la fila (con _fila) para editarla */
+const buscarFila = async (consecutivo) => {
+  const { encabezados, filas } = await leerMantenimientos();
+  const fila = filas.find((m) => m.consecutivo && mismoConsecutivo(m.consecutivo, consecutivo));
+  return { encabezados, fila };
+};
+
+/**
+ * Edita solo los campos que llegan con valor (igual que antes: vacío = no cambia).
+ * Editables: placa, tipo_mantenimiento, descripcion, valor_mantenimiento, odometro, numero_factura (+ archivos).
+ * Devuelve null si no existe; si existe, { anterior, actual } (el controlador usa anterior para permisos/odómetro).
+ * opciones.validar(anterior, cambios) se ejecuta antes de escribir (permisos, vehículo).
+ */
+const editarMantenimientoporConsecutivo = async (consecutivo, nuevosDatos = {}, opciones = {}) => {
+  const resultado = await conCandado(HOJA, async () => {
+    const { encabezados, fila } = await buscarFila(consecutivo);
+    if (!fila) return null;
+
+    const cambios = {};
+    if (texto(nuevosDatos.placa) && normalizarPlaca(nuevosDatos.placa) !== fila.placa) {
+      cambios.placa = normalizarPlaca(nuevosDatos.placa);
+    }
+    if (texto(nuevosDatos.tipo_mantenimiento)) cambios.tipo_mantenimiento = minuscula(nuevosDatos.tipo_mantenimiento);
+    if (texto(nuevosDatos.descripcion)) cambios.descripcion = texto(nuevosDatos.descripcion);
+    if (texto(nuevosDatos.valor_mantenimiento)) cambios.valor_mantenimiento = validarValor(nuevosDatos.valor_mantenimiento);
+    if (texto(nuevosDatos.odometro)) cambios.odometro = leerOdometro(nuevosDatos.odometro);
+    if (texto(nuevosDatos.numero_factura)) cambios.numero_factura = texto(nuevosDatos.numero_factura);
+
+    if (opciones.validar) await opciones.validar(publico(fila), cambios);
+
+    const { carpeta } = await guardarArchivos(nuevosDatos.archivos, fila.consecutivo);
+    if (carpeta) cambios.link = carpeta.link;
+    else if (texto(nuevosDatos.Link)) cambios.link = texto(nuevosDatos.Link);
+
+    // Si con esta edición ya hay número de factura y soporte, queda legalizado
+    const numeroFinal = cambios.numero_factura ?? fila.numero_factura;
+    let linkFactura = fila.link_factura;
+    if (numeroFinal && !linkFactura && carpeta) linkFactura = cambios.link_factura = carpeta.link;
+    if (numeroFinal && linkFactura && fila.estado_factura !== 'legalizado') cambios.estado_factura = 'legalizado';
+
+    if (Object.keys(cambios).length) {
+      await actualizarCampos(HOJA, encabezados, fila._fila, cambios, { omitirFaltantes: true });
+    }
+    return { anterior: publico(fila), actual: { ...publico(fila), ...cambios } };
+  });
+
+  if (!resultado) return null;
+  const { anterior, actual } = resultado;
+
+  // Mantener el libro de gastos al día. Si cambió la placa, el gasto de la placa anterior queda en 0
+  if (anterior.placa !== actual.placa) {
+    await libroGastos.registrarOActualizar({
+      placa: anterior.placa,
+      tipo_gasto: TIPO_GASTO,
+      codigo_referencia: anterior.consecutivo,
+      valor_gasto: 0,
+      descripcion: `Mantenimiento trasladado a la placa ${actual.placa}`,
+    });
+  }
+  await registrarGasto(actual);
+
+  return resultado;
+};
+
+/**
+ * Legaliza la factura: exige número de factura y un soporte (archivo nuevo o link ya guardado).
+ * opciones.validar(registro) se ejecuta antes de escribir (permisos).
+ */
+const legalizarMantenimiento = async (consecutivo, { numero_factura, archivos } = {}, opciones = {}) =>
+  conCandado(HOJA, async () => {
+    const { encabezados, fila } = await buscarFila(consecutivo);
+    if (!fila) throw new ErrorApp(404, 'Mantenimiento no encontrado');
+    if (opciones.validar) await opciones.validar(publico(fila));
+
+    const numero = texto(numero_factura);
+    if (!numero) throw new ErrorApp(400, 'Ingrese el número de la factura');
+    if (fila.estado_factura === 'legalizado') {
+      throw new ErrorApp(400, `El mantenimiento ${fila.consecutivo} ya está legalizado (factura ${fila.numero_factura || 'sin número'})`);
+    }
+
+    const cambios = { numero_factura: numero, estado_factura: 'legalizado' };
+
+    if (archivos?.length) {
+      const { carpeta, subidos } = await guardarArchivos(archivos, fila.consecutivo, 'factura - ');
+      // Un solo archivo → link directo a la factura; varios → la carpeta
+      cambios.link_factura = (subidos.length === 1 && subidos[0].webViewLink) || carpeta.link;
+      if (!fila.link) cambios.link = carpeta.link;
+    } else if (fila.link_factura || fila.link) {
+      cambios.link_factura = fila.link_factura || fila.link;
+    } else {
+      throw new ErrorApp(400, 'Adjunte la foto o el PDF de la factura para legalizar');
+    }
+
+    await actualizarCampos(HOJA, encabezados, fila._fila, cambios, { omitirFaltantes: true });
+    return {
+      consecutivo: fila.consecutivo,
+      placa: fila.placa,
+      valor: fila.valor_mantenimiento,
+      estado_factura: 'legalizado',
+      numero_factura: numero,
+      link_factura: cambios.link_factura,
+      mensaje: 'Mantenimiento legalizado correctamente',
+    };
+  });
+
+/**
+ * Registra en Gastos_Vehiculos los mantenimientos que se crearon antes de este cambio.
+ * Se puede correr una vez (no duplica: registrarOActualizar actualiza si ya existe).
+ */
+const sincronizarGastosMantenimientos = async () => {
+  const lista = await getMantenimientos();
+  let registrados = 0;
+  for (const m of lista) {
+    if (!m.consecutivo || !m.placa || !(m.valor_mantenimiento > 0)) continue;
+    await registrarGasto(m);
+    registrados++;
+  }
+  return { registrados, total: lista.length };
+};
+
+// Compatibilidad: antes el controlador subía archivos por separado
 const procesarArchivos = async (archivos, consecutivo) => {
-  if (!archivos || archivos.length === 0) {
-    return null;
-  }
-    
-  let carpeta = await buscarCarpetaPorNombre(consecutivo, carpetaPadreId);
-  
-  if (!carpeta) {
-    carpeta = await crearCarpeta(consecutivo, carpetaPadreId);
-  }
-  
-  const enlaces = [];
-  for (const archivo of archivos) {
-    const enlace = await subirArchivo(archivo, carpeta.id);
-    enlaces.push(enlace);
-  }
-  
-  return carpeta.webViewLink;
+  const { carpeta } = await guardarArchivos(archivos, consecutivo);
+  return carpeta?.link || null;
 };
 
 const subirArchivosACarpetaExistente = async (archivos, carpetaId) => {
-  if (!archivos || archivos.length === 0) {
-    return null;
-  }
-  
-  // Subir cada archivo a la carpeta existente
-  const enlaces = [];
-  for (const archivo of archivos) {
-    const enlace = await subirArchivo(archivo, carpetaId);
-    enlaces.push(enlace);
-  }
-  
-  // Devolver el enlace a la carpeta (necesitamos obtenerlo)
-  const drive = getDriveClient();
-  const carpeta = await drive.files.get({
-    fileId: carpetaId,
-    fields: 'webViewLink'
-  });
-  
-  return carpeta.data.webViewLink;
-};
-
-const buscarCarpetaPorNombre = async (nombreCarpeta, parentFolderId) => {
-  const drive = getDriveClient();
-  
-  // Crear consulta para buscar por nombre exacto dentro de la carpeta padre
-  let query = `name = '${nombreCarpeta}' and mimeType = 'application/vnd.google-apps.folder'`;
-  if (parentFolderId) {
-    query += ` and '${parentFolderId}' in parents`;
-  }
-  
-  const response = await drive.files.list({
-    q: query,
-    fields: 'files(id, name, webViewLink)',
-    spaces: 'drive'
-  });
-  
-  return response.data.files.length > 0 ? response.data.files[0] : null;
+  if (!archivos?.length) return null;
+  await subirArchivos(archivos, carpetaId);
+  return linkCarpeta(carpetaId);
 };
 
 export const mantenimientoHelper = {
   getMantenimientos,
   getResumenMantenimientosPorPlaca,
   guardarMantenimiento,
-  getSiguienteConsecutivo,  
+  getSiguienteConsecutivo,
   getMantenimientosByConsecutivo,
   getMantenimientosOrdenadosPorValor,
   getMantenimientosPorTipo,
   getMantenimientosOrdenadosPorFechaRegistro,
   getMantenimientosPorPlaca,
+  getMantenimientosPorEstadoFactura,
   editarMantenimientoporConsecutivo,
+  legalizarMantenimiento,
+  sincronizarGastosMantenimientos,
   procesarArchivos,
-  subirArchivosACarpetaExistente
+  subirArchivosACarpetaExistente,
+  validarValor,
+  leerOdometro,
+  formatoMiles,
 };

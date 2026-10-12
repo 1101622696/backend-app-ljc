@@ -1,278 +1,203 @@
-import { getSheetsClient } from '../services/google.js';
+import { leerHoja, actualizarCampos, agregarFila, aNumero, siguienteConsecutivo, conCandado } from './hoja.js';
+import { hoy } from './fechas.js';
+import { ErrorApp } from './errores.js';
 
-const spreadsheetId = process.env.SPREADSHEET_ID;
+// ─────────────────────────────────────────────────────────────
+// Hoja "Clientes" por NOMBRE de columna.
+// Encabezados: codigo, empresa, nit, estado, viajes, telefono, email, tipo_pago, rete_fuente, rete_ica,
+//              fecha_creacion, total_valor_viaje_estimado, total_valor_viaje_real, total_ganancia_viaje
+//
+// rete_ica se guarda en PORCENTAJE: 1.0 = 1 % = 10 por mil. (Si el certificado dice "x mil", dividir entre 10.)
+//
+// Los totales por cliente (viajes, valores, ganancia y cumplimiento del precio) se CALCULAN desde
+// Viajes al consultar, filtrados por lo que el usuario puede ver: el propietario ve la ganancia
+// de SUS viajes; el admin, de todos. Las columnas de totales de la hoja ya no se usan.
+// ─────────────────────────────────────────────────────────────
 
-const obtenerDatosCliente = async () => {
-  const sheets = getSheetsClient();
-  
-  const range = 'Clientes!A1:N100'; 
+const HOJA = 'Clientes';
+const ESTADOS_CON_VALOR = ['aprobado', 'facturado', 'pagado'];
 
-  const res = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range,
-  });
+const minuscula = (v) => String(v ?? '').trim().toLowerCase();
+const soloDigitosNit = (nit) => String(nit ?? '').replace(/[^\d]/g, '');
 
-  const rows = res.data.values;
-  if (!rows || rows.length === 0) return [];
+const normalizar = (f) => ({
+  ...f,
+  codigo: String(f.codigo ?? '').trim().toUpperCase(),
+  empresa: String(f.empresa ?? '').trim(),
+  estado: minuscula(f.estado) || 'activo',
+  tipo_pago: minuscula(f.tipo_pago),
+  rete_fuente: minuscula(f.rete_fuente) === 'si' ? 'si' : 'no',
+  rete_ica: aNumero(f.rete_ica),
+});
 
-  const headers = rows[0].map(h => h.trim().toLowerCase());
-  return rows.slice(1).map(row =>
-    Object.fromEntries(row.map((val, i) => [headers[i], val]))
-  );
-};
+async function leerClientes() {
+  const { encabezados, filas } = await leerHoja(HOJA);
+  return { encabezados, clientes: filas.filter((f) => f.codigo).map(normalizar) };
+}
 
-const getClientes = () => obtenerDatosCliente();
+const sinFila = ({ _fila, ...r }) => r;
 
-const getSiguienteCodigo = async () => {
-  const clientes = await getClientes();
-
-  if (!clientes.length) return "C-1";
-
-  const maxNumero = Math.max(
-    ...clientes.map((c) => parseInt(c.codigo?.split('-')[1], 10) || 0)
-  );
-  
-  return `C-${maxNumero + 1}`;
-};
-
-const guardarCliente = async ({  empresa, nit, estado, viajes, telefono, email,tipo_pago, rete_fuente, rete_ica, fecha_creacion }) => {
-  const sheets = getSheetsClient();
-  const codigo = await getSiguienteCodigo();
-
-  const nuevaFila = [ codigo, empresa, nit, estado, viajes, telefono, email, tipo_pago, rete_fuente, rete_ica, fecha_creacion];
-
-  await sheets.spreadsheets.values.append({
-    spreadsheetId,
-      range: 'Clientes!A1:N100',
-    valueInputOption: 'RAW',
-    insertDataOption: 'INSERT_ROWS',
-    requestBody: { values: [nuevaFila] },
-  });
-
-  return { codigo };
-};
+/** Todos los clientes (uso interno: viajes, etc.) */
+const getClientes = async () => (await leerClientes()).clientes.map(sinFila);
 
 const getClienteById = async (codigo) => {
-  const clientes = await getClientes();
-  return clientes.find(cliente => 
-    cliente.codigo && cliente.codigo.toLowerCase() === codigo.toLowerCase()
-  );
+  const buscado = String(codigo ?? '').trim().toUpperCase();
+  return (await getClientes()).find((c) => c.codigo === buscado) || null;
 };
 
-const filtrarClientesPorCampoTexto = (clientes, campo, valor) => {
-  return clientes.filter(cliente => 
-    cliente[campo] && cliente[campo].toLowerCase() === valor.toLowerCase()
-  );
-};
+// ── Totales calculados desde Viajes ──
 
-const ordenarClientesPorCampoNumerico = (clientes, campo, orden = 'desc') => {
-  return clientes.sort((a, b) => {
-    const valorA = parseFloat(a[campo]) || 0;
-    const valorB = parseFloat(b[campo]) || 0;
-    
-    return orden.toLowerCase() === 'desc' ? valorB - valorA : valorA - valorB;
+/**
+ * Agrega a cada cliente: viajes, total_valor_viaje_estimado, total_valor_viaje_real, total_ganancia_viaje,
+ * y cómo cumple lo prometido: diferencia_precio_total (valor tonelada final vs inicial),
+ * viajes_precio_menor, valor_merma_total y diferencia_facturacion_total.
+ * usuario: si se pasa, solo cuenta los viajes que ese usuario puede ver.
+ */
+async function conTotales(clientes, usuario = null) {
+  const { viajeHelper } = await import('./viajes.js'); // import diferido: viajes.js importa este archivo
+  const viajes = (await viajeHelper.getTodosLosViajes()).filter(
+    (v) => ESTADOS_CON_VALOR.includes(v.estado_viaje) && (!usuario || viajeHelper.puedeVerViaje(usuario, v))
+  );
+
+  const totales = {};
+  for (const v of viajes) {
+    const t = (totales[String(v.cliente).toUpperCase()] ||= {
+      viajes: 0, estimado: 0, real: 0, ganancia: 0, difPrecio: 0, precioMenor: 0, merma: 0, difFactura: 0,
+    });
+    t.viajes++;
+    t.estimado += aNumero(v.valor_viaje_estimado);
+    t.real += aNumero(v.valor_viaje_real);
+    t.ganancia += aNumero(v.ganancia_viaje_real) || aNumero(v.ganancia_viaje_estimada);
+    t.difPrecio += aNumero(v.diferencia_precio);
+    if (aNumero(v.diferencia_precio) < 0) t.precioMenor++;
+    t.merma += aNumero(v.valor_merma);
+    t.difFactura += aNumero(v.diferencia_facturacion);
+  }
+
+  return clientes.map((c) => {
+    const t = totales[c.codigo] || {};
+    return {
+      ...c,
+      viajes: t.viajes || 0,
+      total_valor_viaje_estimado: Math.round(t.estimado || 0),
+      total_valor_viaje_real: Math.round(t.real || 0),
+      total_ganancia_viaje: Math.round(t.ganancia || 0),
+      diferencia_precio_total: Math.round(t.difPrecio || 0),
+      viajes_precio_menor: t.precioMenor || 0,
+      valor_merma_total: Math.round(t.merma || 0),
+      diferencia_facturacion_total: Math.round(t.difFactura || 0),
+    };
   });
+}
+
+const listarConTotales = async (usuario) => conTotales(await getClientes(), usuario);
+
+const obtenerConTotales = async (usuario, codigo) => {
+  const cliente = await getClienteById(codigo);
+  if (!cliente) return null;
+  return (await conTotales([cliente], usuario))[0];
 };
 
-const getClientesPorEstado = async (valor) => {
-  const clientes = await getClientes();
-  return filtrarClientesPorCampoTexto(clientes, 'estado', valor);
-};
+// ── Filtros y ordenamientos (sobre la lista con totales del usuario) ──
 
-const getClientesOrdenadosPorViajes = async (orden = 'desc') => {
-  const clientes = await getClientes();
-  return ordenarClientesPorCampoNumerico(clientes, 'viajes', orden);
-};
+const filtrar = (campo) => async (valor, usuario = null) =>
+  (await listarConTotales(usuario)).filter((c) => minuscula(c[campo]) === minuscula(valor));
 
-const getClientesPorTipoPago = async (valor) => {
-  const clientes = await getClientes();
-  return filtrarClientesPorCampoTexto(clientes, 'tipo_pago', valor);
-};
+const ordenar = (campo) => async (orden = 'desc', usuario = null) =>
+  (await listarConTotales(usuario)).sort((a, b) =>
+    orden === 'desc' ? aNumero(b[campo]) - aNumero(a[campo]) : aNumero(a[campo]) - aNumero(b[campo])
+  );
 
-const getClientesPorReteFuente = async (valor) => {
-  const clientes = await getClientes();
-  return filtrarClientesPorCampoTexto(clientes, 'rete_fuente', valor);
-};
+const getClientesPorEstado = filtrar('estado');
+const getClientesPorTipoPago = filtrar('tipo_pago');
+const getClientesPorReteFuente = filtrar('rete_fuente');
+const getClientesOrdenadosPorViajes = ordenar('viajes');
+const getClientesOrdenadosPorReteIca = ordenar('rete_ica');
+const getClientesOrdenadosPorValorEstimado = ordenar('total_valor_viaje_estimado');
+const getClientesOrdenadosPorValorReal = ordenar('total_valor_viaje_real');
+const getClientesOrdenadosPorGanancia = ordenar('total_ganancia_viaje');
 
-const getClientesOrdenadosPorReteIca = async (orden = 'desc') => {
-  const clientes = await getClientes();
-  return ordenarClientesPorCampoNumerico(clientes, 'rete_ica', orden);
-};
+// ── Crear / editar ──
 
-const getClientesOrdenadosPorValorEstimado = async (orden = 'desc') => {
-  const clientes = await getClientes();
-  return ordenarClientesPorCampoNumerico(clientes, 'total_valor_viaje_estimado', orden);
-};
+function prepararDatos(datos, { crear }) {
+  const cambios = {};
+  if (datos.empresa !== undefined) {
+    cambios.empresa = String(datos.empresa).trim();
+    if (!cambios.empresa) throw new ErrorApp(400, 'Escriba el nombre de la empresa');
+  } else if (crear) {
+    throw new ErrorApp(400, 'Escriba el nombre de la empresa');
+  }
+  if (datos.nit !== undefined) cambios.nit = String(datos.nit).trim();
+  if (datos.telefono !== undefined) cambios.telefono = String(datos.telefono).trim();
+  if (datos.email !== undefined) cambios.email = String(datos.email).trim().toLowerCase();
+  if (datos.tipo_pago !== undefined) cambios.tipo_pago = minuscula(datos.tipo_pago);
+  if (datos.rete_fuente !== undefined) cambios.rete_fuente = minuscula(datos.rete_fuente) === 'si' ? 'si' : 'no';
+  if (datos.rete_ica !== undefined && datos.rete_ica !== '') {
+    const tarifa = aNumero(datos.rete_ica);
+    if (tarifa < 0 || tarifa > 5) {
+      throw new ErrorApp(400, 'Rete ICA en porcentaje (ej. 1 = 10 por mil). Debe estar entre 0 y 5.');
+    }
+    cambios.rete_ica = tarifa;
+  }
+  return cambios;
+}
 
-const getClientesOrdenadosPorValorReal = async (orden = 'desc') => {
-  const clientes = await getClientes();
-  return ordenarClientesPorCampoNumerico(clientes, 'total_valor_viaje_real', orden);
-};
+const guardarCliente = (datos) =>
+  conCandado('clientes', async () => {
+    const cambios = prepararDatos(datos, { crear: true });
+    const { encabezados, clientes } = await leerClientes();
 
-const getClientesOrdenadosPorGanancia = async (orden = 'desc') => {
-  const clientes = await getClientes();
-  return ordenarClientesPorCampoNumerico(clientes, 'total_ganancia_viaje', orden);
-};
+    const nit = soloDigitosNit(cambios.nit);
+    if (nit && clientes.some((c) => soloDigitosNit(c.nit) === nit)) {
+      throw new ErrorApp(409, `Ya existe un cliente con el NIT ${cambios.nit}`);
+    }
+
+    const codigo = siguienteConsecutivo(clientes, 'codigo', 'C');
+    await agregarFila(HOJA, encabezados, {
+      rete_fuente: 'no',
+      rete_ica: 0,
+      ...cambios,
+      codigo,
+      estado: 'activo',
+      viajes: 0,
+      fecha_creacion: hoy(),
+    });
+    return { codigo };
+  });
 
 const editarClienteporCodigo = async (codigo, nuevosDatos) => {
-  const sheets = getSheetsClient();
+  const { encabezados, clientes } = await leerClientes();
+  const cliente = clientes.find((c) => c.codigo === String(codigo ?? '').trim().toUpperCase());
+  if (!cliente) return null;
 
-  const response = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: 'Clientes!A2:L50', 
-  });
-
-  const filas = response.data.values;
-  const filaIndex = filas.findIndex(fila => fila[0]?.toLowerCase() === codigo.toLowerCase());
-
-  if (filaIndex === -1) {
-    return null; 
+  const cambios = prepararDatos(nuevosDatos, { crear: false });
+  const nit = soloDigitosNit(cambios.nit);
+  if (nit && clientes.some((c) => c.codigo !== cliente.codigo && soloDigitosNit(c.nit) === nit)) {
+    throw new ErrorApp(409, `Ya existe otro cliente con el NIT ${cambios.nit}`);
   }
-
-  const filaActual = filas[filaIndex];
-  
-  const filaEditada = [
-  filaActual[0], 
-  nuevosDatos.empresa || filaActual[1],
-  nuevosDatos.nit || filaActual[2],
-  filaActual[3],
-  filaActual[4],
-  nuevosDatos.telefono || filaActual[5],
-  nuevosDatos.email || filaActual[6],
-  nuevosDatos.tipo_pago || filaActual[7],
-  nuevosDatos.rete_fuente || filaActual[8],
-  nuevosDatos.rete_ica || filaActual[9],
-  filaActual[10], 
-  filaActual[11], 
-  filaActual[12], 
-  filaActual[13], 
-];
-
-  const filaEnHoja = filaIndex + 2; 
-
-  await sheets.spreadsheets.values.update({
-    spreadsheetId,
-    range: `Clientes!A${filaEnHoja}:N${filaEnHoja}`,
-    valueInputOption: 'RAW',
-    requestBody: {
-      values: [filaEditada],
-    },
-  });
-
+  if (Object.keys(cambios).length) await actualizarCampos(HOJA, encabezados, cliente._fila, cambios, { omitirFaltantes: true });
   return true;
 };
 
-const actualizarEconomiaCliente = async (codigoCliente, valor_viaje_estimado, valor_viaje_real, ganancia_viaje) => {
-  const sheets = getSheetsClient();
-
-  const response = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: 'Clientes!A2:O1000', // Ajusta según tus columnas
-  });
-
-  const filas = response.data.values;
-  const filaIndex = filas.findIndex(f => f[0] === codigoCliente);
-
-  if (filaIndex === -1) {
-    throw new Error('Cliente no encontrado');
-  }
-
-  const filaActual = filas[filaIndex];
-  
-  // Suponiendo que las columnas de economía están en:
-  // L: total_valor_viaje_estimado
-  // M: total_valor_viaje_real
-  // N: total_ganancia_viaje
-  
-  const economiaEstimadaActual = parseFloat(filaActual[11]) || 0;
-  const economiaRealActual = parseFloat(filaActual[12]) || 0;
-  const gananciaActual = parseFloat(filaActual[13]) || 0;
-
-  filaActual[11] = economiaEstimadaActual + valor_viaje_estimado;
-  filaActual[12] = economiaRealActual + valor_viaje_real;
-  filaActual[13] = gananciaActual + ganancia_viaje;
-
-  const filaEnHoja = filaIndex + 2;
-  await sheets.spreadsheets.values.update({
-    spreadsheetId,
-    range: `Clientes!A${filaEnHoja}:O${filaEnHoja}`,
-    valueInputOption: 'RAW',
-    requestBody: { values: [filaActual] },
-  });
-
+const actualizarEstadoEnSheets = async (codigo, nuevoEstado = 'activo') => {
+  const estado = minuscula(nuevoEstado);
+  if (!['activo', 'inactivo'].includes(estado)) throw new ErrorApp(400, 'Estado no válido');
+  const { encabezados, clientes } = await leerClientes();
+  const cliente = clientes.find((c) => c.codigo === String(codigo ?? '').trim().toUpperCase());
+  if (!cliente) return null;
+  await actualizarCampos(HOJA, encabezados, cliente._fila, { estado });
   return true;
 };
 
-const actualizarEstadoEnSheets = async (codigo, nuevoEstado = "activo") => {
-  try {
-    const sheets = getSheetsClient();
-    
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: 'Clientes!A1:L50', 
-    });
-    
-    const rows = response.data.values;
-    if (!rows || rows.length === 0) {
-      throw new Error('No se encontraron datos en la hoja');
-    }
-    
-    // Determinar qué columna contiene el codigo y el estado
-    const headers = rows[0];
-    const codigoIndex = headers.findIndex(header => 
-      header.toLowerCase() === 'codigo');
-    const estadoIndex = headers.findIndex(header => 
-      header.toLowerCase() === 'estado');
-    
-    if (codigoIndex === -1 || estadoIndex === -1) {
-      throw new Error('No se encontraron las columnas necesarias');
-    }
-    
-    // Encontrar la fila que corresponde al codigo
-    let rowIndex = -1;
-    for (let i = 1; i < rows.length; i++) {
-      if (rows[i][codigoIndex] && 
-          rows[i][codigoIndex].toLowerCase() === codigo.toLowerCase()) {
-        rowIndex = i;
-        break;
-      }
-    }
-    
-    if (rowIndex === -1) {
-      throw new Error(`No se encontró el codigo ${codigo}`);
-    }
-    
-    // Actualizar el estado en Google Sheets
-    await sheets.spreadsheets.values.update({
-      spreadsheetId,
-      range: `Clientes!${getColumnLetter(estadoIndex + 1)}${rowIndex + 1}`,
-      valueInputOption: 'RAW',
-      resource: {
-        values: [[nuevoEstado]]
-      }
-    });
-    
-    return true;
-  } catch (error) {
-    console.error('Error al actualizar el estado en Google Sheets:', error);
-    throw error;
-  }
-};
-
-function getColumnLetter(columnNumber) {
-  let columnLetter = '';
-  while (columnNumber > 0) {
-    const remainder = (columnNumber - 1) % 26;
-    columnLetter = String.fromCharCode(65 + remainder) + columnLetter;
-    columnNumber = Math.floor((columnNumber - 1) / 26);
-  }
-  return columnLetter;
-}
+/** Ya no acumula en la hoja: los totales se calculan desde Viajes al consultar. Se deja por compatibilidad */
+const actualizarEconomiaCliente = async () => true;
 
 export const clienteHelper = {
   getClientes,
-  guardarCliente,
   getClienteById,
+  listarConTotales,
+  obtenerConTotales,
+  guardarCliente,
   getClientesPorEstado,
   getClientesOrdenadosPorViajes,
   getClientesPorTipoPago,
@@ -283,5 +208,5 @@ export const clienteHelper = {
   getClientesOrdenadosPorGanancia,
   editarClienteporCodigo,
   actualizarEstadoEnSheets,
-  actualizarEconomiaCliente
+  actualizarEconomiaCliente,
 };

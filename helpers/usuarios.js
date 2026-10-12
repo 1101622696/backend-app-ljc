@@ -1,517 +1,531 @@
-import { generarJWT } from './generar-jwt.js'; 
-import { getDriveClient, getSheetsClient } from '../services/google.js';
-import { enviarCodigoRecuperacion } from '../helpers/email.js'
+import bcrypt from 'bcryptjs';
+import crypto from 'crypto';
+import { generarJWT } from './generar-jwt.js';
+import { getSheetsClient } from '../services/google.js';
+import { enviarCodigoRecuperacion } from './email.js';
+import { leerHoja, actualizarCampos, agregarFila } from './hoja.js';
+import { accesosHelper } from './accesos.js';
+import { ahora, minutosDesde, parsearFecha, sumarAnios, aFechaISO } from './fechas.js';
+import { ErrorApp } from './errores.js';
 
-const spreadsheetId = process.env.SPREADSHEET_ID;
-// const carpetaPadreId = process.env.CARPETA_PADRE_ID_USUARIOS;
+// ─────────────────────────────────────────────────────────────
+// Hoja "Usuarios". Se lee y escribe por NOMBRE de columna.
+// Columnas nuevas que deben existir al final de los encabezados:
+//   password_actualizada | debe_cambiar_password | intentos_codigo
+// ─────────────────────────────────────────────────────────────
 
-const leerUsuariosDesdeSheets = async () => {
-  const sheets = getSheetsClient();
-  
-  const range = 'Usuarios!A1:AD15'; 
+const HOJA = 'Usuarios';
+const PERFILES = ['administrador', 'propietario', 'conductor'];
+const MIN_PASSWORD = 6;
+const CACHE_MS = 30_000;
+const VIGENCIA_CODIGO_MIN = 15;
+const MAX_INTENTOS_CODIGO = 5;
 
-  const res = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range,
-  });
+// Marca de versión de la contraseña (con milisegundos). Va en el token como pv.
+const nuevaVersion = () => new Date().toISOString();
 
-  const rows = res.data.values;
-  if (!rows || rows.length === 0) return [];
+// Campos que nunca salen del backend
+const CAMPOS_PRIVADOS = [
+  'password', 'codigo', 'fecha_codigo', 'token', 'fecha_actualizacion_token',
+  'password_actualizada', 'intentos_codigo', '_fila',
+];
 
-  const headers = rows[0].map(h => h.trim().toLowerCase());
-  return rows.slice(1).map(row =>
-    Object.fromEntries(row.map((val, i) => [headers[i], val]))
-  );
+// Campos de datos personales que se pueden crear/editar desde el formulario
+const CAMPOS_PERSONALES = [
+  'nombre', 'tipo_documento', 'documento', 'ciudad_expedicion', 'fecha_expedicion',
+  'pais_nacimiento', 'ciudad_nacimiento', 'fecha_nacimiento', 'grupo_sanguineo_rh', 'genero',
+  'estado_civil', 'telefono', 'tipo_licencia', 'num_licencia', 'fecha_expedicion_licencia',
+  'fecha_vencimiento_licencia',
+];
+const CAMPOS_NOMINA = ['salario_base', 'sso'];
+const CAMPOS_BANCO = ['banco', 'num_cuenta']; // solo el administrador
+
+// ── Utilidades ──
+
+const normalizarEmail = (email) => String(email ?? '').trim().toLowerCase();
+
+const listaPlacas = (texto) => [
+  ...new Set(
+    String(texto ?? '')
+      .split(',')
+      .map((p) => p.replace(/\s+/g, '').toUpperCase()) // 'snt 473' → 'SNT473'
+      .filter(Boolean)
+  ),
+];
+
+const placasDe = (usuario) => listaPlacas(usuario?.placa_asignada);
+
+const esHash = (valor) => /^\$2[aby]\$\d{2}\$/.test(String(valor ?? ''));
+
+const hashear = (texto) => bcrypt.hash(String(texto), 10);
+
+/** Compara contra hash; si la contraseña guardada aún está en texto plano, compara directo */
+const verificarPassword = async (ingresada, guardada) => {
+  if (guardada === '' || guardada === null || guardada === undefined) return false;
+  if (esHash(guardada)) return bcrypt.compare(String(ingresada), String(guardada));
+  const a = Buffer.from(String(ingresada));
+  const b = Buffer.from(String(guardada));
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
 };
 
-const getUsuarios = () => leerUsuariosDesdeSheets();
-
-const loginUsuario = async ({ email, password }) => {
-    const usuarios = await leerUsuariosDesdeSheets();
-    
-    const usuario = usuarios.find(u => u.email === email);
-    
-    if (!usuario) {
-      throw new Error('Usuario no encontrado');
-    }
-    
-    if (usuario.estado === 'inactivo') {
-      throw new Error('Usuario o contraseña incorrecta');
-    }
-    
-    if (usuario.password !== password) {
-      throw new Error('Usuario o contraseña incorrecta');
-    }
-    
-    const token = await generarJWT(
-      usuario.id || usuario.email, 
-      usuario.perfil,
-      usuario.email,
-      usuario.nombre,
-      usuario.placa_asignada || null 
-    );
-      
-    return {
-      token,
-      usuario: {
-        id: usuario.id,
-        nombre: usuario.nombre,
-        email: usuario.email,
-        perfil: usuario.perfil,
-        placa_asignada: usuario.placa_asignada || null
-      }
-    };
+const validarNuevaPassword = (password) => {
+  if (!password || String(password).length < MIN_PASSWORD) {
+    throw new ErrorApp(400, `La contraseña debe tener al menos ${MIN_PASSWORD} caracteres`);
+  }
 };
 
-const getUsuarioByStatus = async (status) => {
-    const usuarios = await getUsuarios();
-    return usuarios.filter(usuario => 
-      usuario.estado && usuario.estado.toLowerCase() === status.toLowerCase()
-    );
+const normalizarUsuario = (fila) => ({
+  ...fila,
+  email: normalizarEmail(fila.email),
+  perfil: String(fila.perfil ?? '').trim().toLowerCase(),
+  estado: String(fila.estado ?? '').trim().toLowerCase() || 'activo',
+  placa_asignada: listaPlacas(fila.placa_asignada).join(', '),
+  debe_cambiar_password: String(fila.debe_cambiar_password ?? '').trim().toLowerCase() === 'si' ? 'si' : 'no',
+});
+
+/** Quita contraseñas, códigos y tokens. Nunca devolver un usuario sin pasar por aquí */
+const sanitizar = (usuario) => {
+  if (!usuario) return null;
+  const limpio = { ...usuario };
+  CAMPOS_PRIVADOS.forEach((campo) => delete limpio[campo]);
+  return limpio;
 };
+
+// ── Lectura con caché (validar-jwt lee usuarios en cada petición) ──
+
+let cache = null;
+let cacheHasta = 0;
+
+const invalidarCache = () => {
+  cache = null;
+  cacheHasta = 0;
+};
+
+async function leerUsuarios({ fresco = false } = {}) {
+  if (!fresco && cache && Date.now() < cacheHasta) return cache;
+  const { encabezados, filas } = await leerHoja(HOJA);
+  const usuarios = filas.filter((f) => normalizarEmail(f.email)).map(normalizarUsuario);
+  cache = { encabezados, usuarios };
+  cacheHasta = Date.now() + CACHE_MS;
+  return cache;
+}
+
+async function escribir(usuario, cambios) {
+  const { encabezados } = await leerUsuarios();
+  await actualizarCampos(HOJA, encabezados, usuario._fila, cambios, { omitirFaltantes: true });
+  invalidarCache();
+}
+
+// ── Consultas (devuelven datos COMPLETOS: solo para uso interno del backend) ──
+
+const getUsuarios = async () => (await leerUsuarios()).usuarios;
+const leerUsuariosDesdeSheets = getUsuarios; // nombre anterior, lo usan nómina y otros módulos
 
 const getUsuarioByEmail = async (email) => {
-    const usuarios = await getUsuarios();
-    return usuarios.find(usuario => 
-      usuario.email && usuario.email.toLowerCase() === email.toLowerCase()
-    );
+  const correo = normalizarEmail(email);
+  return (await getUsuarios()).find((u) => u.email === correo) || null;
 };
 
+const getUsuarioByStatus = async (estado) =>
+  (await getUsuarios()).filter((u) => u.estado === String(estado).toLowerCase());
+
+const getUsuarioPorEstado = getUsuarioByStatus;
+
+const getUsuarioPorPerfil = async (perfil) =>
+  (await getUsuarios()).filter((u) => u.perfil === String(perfil).toLowerCase());
+
+/** Conductores que manejan alguna de las placas del propietario */
 const getUsuariosPorPropietario = async (emailPropietario) => {
-
-  const usuarios = await getUsuarios()
-
-  // buscar propietario
-  const propietario = usuarios.find(
-    u => u.email?.toLowerCase() === emailPropietario.toLowerCase()
-  )
-
-  if (!propietario) return []
-
-  // placas del propietario
-  const placasPropietario = propietario.placa_asignada
-    ? propietario.placa_asignada
-        .split(',')
-        .map(p => p.trim().toUpperCase())
-    : []
-
-  // traer conductores que tengan alguna de esas placas
-  return usuarios.filter(usuario => {
-
-    if (usuario.perfil !== 'conductor') return false
-
-    const placasConductor = usuario.placa_asignada
-      ? usuario.placa_asignada
-          .split(',')
-          .map(p => p.trim().toUpperCase())
-      : []
-
-    return placasConductor.some(p =>
-      placasPropietario.includes(p)
-    )
-
-  })
-
-}
-  
-const filtrarUsuarioPorCampoTexto = (usuarios, campo, valor) => {
-  return usuarios.filter(usuario => 
-    usuario[campo] && usuario[campo].toLowerCase() === valor.toLowerCase()
-  );
-};
-
-const ordenarUsuariosPorCampoNumerico = (usuarios, campo, orden = 'desc') => {
-  return usuarios.sort((a, b) => {
-    const valorA = parseFloat(a[campo]) || 0;
-    const valorB = parseFloat(b[campo]) || 0;
-    
-    return orden.toLowerCase() === 'desc' ? valorB - valorA : valorA - valorB;
-  });
-};
-
-const getUsuarioPorPerfil = async (valor) => {
   const usuarios = await getUsuarios();
-  return filtrarUsuarioPorCampoTexto(usuarios, 'perfil', valor);
-};
-
-const getUsuarioPorEstado = async (valor) => {
-  const usuarios = await getUsuarios();
-  return filtrarUsuarioPorCampoTexto(usuarios, 'estado', valor);
+  const propietario = usuarios.find((u) => u.email === normalizarEmail(emailPropietario));
+  if (!propietario) return [];
+  const placas = placasDe(propietario);
+  return usuarios.filter((u) => u.perfil === 'conductor' && placasDe(u).some((p) => placas.includes(p)));
 };
 
 const getUsuariosOrdenadosPorViajes = async (orden = 'desc') => {
-  const usuarios = await getUsuarios();
-  return ordenarUsuariosPorCampoNumerico(usuarios, 'viajes', orden);
-};
-
-const getUsuariosOrdenadosPorFechaLicencia = async (orden = 'desc') => {
-  const usuarios = await getUsuarios();
-  
+  const usuarios = [...(await getUsuarios())];
   return usuarios.sort((a, b) => {
-    const fechaA = new Date(a.fecha_vencimiento_licencia || 0);
-    const fechaB = new Date(b.fecha_vencimiento_licencia || 0);
-    
-    return orden.toLowerCase() === 'desc' ? fechaB - fechaA : fechaA - fechaB;
+    const va = Number(a.viajes_realizados) || 0;
+    const vb = Number(b.viajes_realizados) || 0;
+    return orden === 'desc' ? vb - va : va - vb;
   });
 };
 
-const guardarUsuario = async ({ nombre, email, password, perfil, estado,  placa_asignada, tipo_documento, documento, ciudad_expedicion, fecha_expedicion, pais_nacimiento, ciudad_nacimiento, fecha_nacimiento, grupo_sanguineo_rh, genero, estado_civil, telefono, tipo_licencia, num_licencia, fecha_expedicion_licencia, fecha_vencimiento, viajes_realizados, banco, num_cuenta, salario_base, sso, codigo, fechacodigo }) => {
-    const sheets = getSheetsClient();
-    const nuevaFila = [nombre, email, password, perfil, estado,  placa_asignada, tipo_documento, documento, ciudad_expedicion, fecha_expedicion, pais_nacimiento, ciudad_nacimiento, fecha_nacimiento, grupo_sanguineo_rh, genero, estado_civil, telefono, tipo_licencia, num_licencia, fecha_expedicion_licencia, fecha_vencimiento, viajes_realizados, banco, num_cuenta, salario_base, sso, codigo, fechacodigo];
-  
-    await sheets.spreadsheets.values.append({
-      spreadsheetId,
-      range: 'Usuarios!A1:AB15',
-      valueInputOption: 'RAW',
-      insertDataOption: 'INSERT_ROWS',
-      requestBody: { values: [nuevaFila] },
-    });
-  
-    return { nombre };
+const getUsuariosOrdenadosPorFechaLicencia = async (orden = 'desc') => {
+  const usuarios = [...(await getUsuarios())];
+  return usuarios.sort((a, b) => {
+    const fa = parsearFecha(a.fecha_vencimiento_licencia)?.getTime() || 0;
+    const fb = parsearFecha(b.fecha_vencimiento_licencia)?.getTime() || 0;
+    return orden === 'desc' ? fb - fa : fa - fb;
+  });
 };
-
-const editarUsuario= async (email, nuevosDatos) => {
-    const sheets = getSheetsClient();
-  
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: 'Usuarios!A2:AB15', 
-    });
-  
-    const filas = response.data.values;
-    const filaIndex = filas.findIndex(fila => fila[1]?.toLowerCase() === email.toLowerCase());
-  
-    if (filaIndex === -1) {
-      return null; 
-    }
-  
-    // teer los datos actuales
-    const filaActual = filas[filaIndex];
-    
-    const filaEditada = [
-      nuevosDatos.nombre || filaActual[0],
-      nuevosDatos.email || filaActual[1],
-      nuevosDatos.password || filaActual[2],
-      nuevosDatos.perfil || filaActual[3],
-      filaActual[4], 
-      nuevosDatos.placa_asignada || filaActual[5], 
-      nuevosDatos.tipo_documento || filaActual[6], 
-      nuevosDatos.documento || filaActual[7], 
-      nuevosDatos.ciudad_expedicion || filaActual[8], 
-      nuevosDatos.fecha_expedicion || filaActual[9], 
-      nuevosDatos.pais_nacimiento || filaActual[10], 
-      nuevosDatos.ciudad_nacimiento || filaActual[11], 
-      nuevosDatos.fecha_nacimiento || filaActual[12], 
-      nuevosDatos.grupo_sanguineo_rh || filaActual[13], 
-      nuevosDatos.genero || filaActual[14], 
-      nuevosDatos.estado_civil || filaActual[15], 
-      nuevosDatos.telefono || filaActual[16], 
-      nuevosDatos.tipo_licencia || filaActual[17], 
-      nuevosDatos.num_licencia || filaActual[18], 
-      nuevosDatos.fecha_expedicion_licencia || filaActual[19], 
-      nuevosDatos.fecha_vencimiento || filaActual[20], 
-      nuevosDatos.viajes_realizados || filaActual[21], 
-      nuevosDatos.banco || filaActual[22], 
-      nuevosDatos.num_cuenta || filaActual[23], 
-      nuevosDatos.salario_base || filaActual[24], 
-      nuevosDatos.sso || filaActual[25], 
-      filaActual[26], 
-      filaActual[27],
-      filaActual[28],
-
-    ];
-  
-    const filaEnHoja = filaIndex + 2; 
-  
-    await sheets.spreadsheets.values.update({
-      spreadsheetId,
-      range: `Usuarios!A${filaEnHoja}:AB${filaEnHoja}`,
-      valueInputOption: 'RAW',
-      requestBody: {
-        values: [filaEditada],
-      },
-    });
-  
-    return true;
-};
-
-const editarPasswordUsuario= async (email, password) => {
-    const sheets = getSheetsClient();
-  
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: 'Usuarios!A2:N', 
-    });
-  
-    const filas = response.data.values;
-    const filaIndex = filas.findIndex(fila => fila[1]?.toLowerCase() === email.toLowerCase());
-  
-    if (filaIndex === -1) {
-      return null; 
-    }
-  
-    // teer los datos actuales
-    const filaActual = filas[filaIndex];
-    
-    const filaEditada = [
-      filaActual[0], 
-      filaActual[1], 
-      password.password || filaActual[2],
-      filaActual[3], 
-      filaActual[4], 
-      filaActual[5], 
-      filaActual[6], 
-      filaActual[7], 
-      filaActual[8], 
-      filaActual[9], 
-      filaActual[10], 
-      filaActual[11], 
-      filaActual[12], 
-      filaActual[13], 
-      filaActual[14], 
-      filaActual[15], 
-      filaActual[16], 
-      filaActual[17], 
-      filaActual[18], 
-      filaActual[19], 
-      filaActual[20], 
-      filaActual[21], 
-      filaActual[22], 
-      filaActual[23], 
-      filaActual[24], 
-      filaActual[25], 
-      filaActual[26], 
-      filaActual[27], 
-    ];
-  
-    const filaEnHoja = filaIndex + 2; 
-  
-    await sheets.spreadsheets.values.update({
-      spreadsheetId,
-      range: `Usuarios!A${filaEnHoja}:G${filaEnHoja}`,
-      valueInputOption: 'RAW',
-      requestBody: {
-        values: [filaEditada],
-      },
-    });
-  
-    return true;
-};
-  
-const actualizarEstadoEnSheets = async (email, nuevoEstado = "activo") => {
-    try {
-      const sheets = getSheetsClient();
-      
-      const response = await sheets.spreadsheets.values.get({
-        spreadsheetId,
-        range: 'Usuarios',
-      });
-      
-      const rows = response.data.values;
-      if (!rows || rows.length === 0) {
-        throw new Error('No se encontraron datos en la hoja');
-      }
-      
-      // Determinar qué columna contiene el email y el estado
-      const headers = rows[0];
-      const emailIndex = headers.findIndex(header => 
-        header.toLowerCase() === 'email');
-      const estadoIndex = headers.findIndex(header => 
-        header.toLowerCase() === 'estado');
-      
-      if (emailIndex === -1 || estadoIndex === -1) {
-        throw new Error('No se encontraron las columnas necesarias');
-      }
-      
-      // Encontrar la fila que corresponde al email
-      let rowIndex = -1;
-      for (let i = 1; i < rows.length; i++) {
-        if (rows[i][emailIndex] && 
-            rows[i][emailIndex].toLowerCase() === email.toLowerCase()) {
-          rowIndex = i;
-          break;
-        }
-      }
-      
-      if (rowIndex === -1) {
-        throw new Error(`No se encontró el email ${email}`);
-      }
-      
-      // Actualizar el estado en Google Sheets
-      await sheets.spreadsheets.values.update({
-        spreadsheetId,
-        range: `Usuarios!${getColumnLetter(estadoIndex + 1)}${rowIndex + 1}`,
-        valueInputOption: 'RAW',
-        resource: {
-          values: [[nuevoEstado]]
-        }
-      });
-      
-      return true;
-    } catch (error) {
-      console.error('Error al actualizar el estado en Google Sheets:', error);
-      throw error;
-    }
-};
-  
-function getColumnLetter(columnNumber) {
-    let columnLetter = '';
-    while (columnNumber > 0) {
-      const remainder = (columnNumber - 1) % 26;
-      columnLetter = String.fromCharCode(65 + remainder) + columnLetter;
-      columnNumber = Math.floor((columnNumber - 1) / 26);
-    }
-    return columnLetter;
-}
-
-const generarCodigo = () => {
-  return Math.floor(100000 + Math.random() * 900000).toString()
-}
-
-const solicitarRecuperacion = async (email) => {
-  const usuarios = await leerUsuariosDesdeSheets()
-  const usuario = usuarios.find(u => u.email === email)
-
-  if (!usuario) throw new Error('Usuario no encontrado')
-  if (usuario.estado === 'inactivo') throw new Error('Usuario inactivo')
-
-  const codigo = generarCodigo()
-  const fecha_codigo = new Date().toISOString() // guarda fecha y hora exacta
-
-  // Actualizar col AA (codigo) y AB (fecha_codigo) en la hoja
-  const sheets = getSheetsClient()
-  const response = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: 'Usuarios!A2:AB15',
-  })
-
-  const filas = response.data.values || []
-  const filaIndex = filas.findIndex(f => f[1] === email) // col B = email
-  if (filaIndex === -1) throw new Error('Usuario no encontrado en hoja')
-
-  const filaEnHoja = filaIndex + 2
-  await sheets.spreadsheets.values.update({
-    spreadsheetId,
-    range: `Usuarios!AA${filaEnHoja}:AB${filaEnHoja}`,
-    valueInputOption: 'RAW',
-    requestBody: { values: [[codigo, fecha_codigo]] },
-  })
-
-  // Enviar email
-  // await enviarCodigoRecuperacion(email, usuario.nombre, codigo)
-
-  try {
-  await enviarCodigoRecuperacion(email, usuario.nombre, codigo)
-} catch (error) {
-  console.error('ERROR ENVIANDO EMAIL:', error)
-  throw error
-}
-
-  return { mensaje: 'Código enviado al correo' }
-}
-
-const verificarCodigo = async (email, codigo) => {
-  const usuarios = await leerUsuariosDesdeSheets()
-  const usuario = usuarios.find(u => u.email === email)
-
-  if (!usuario) throw new Error('Usuario no encontrado')
-  if (!usuario.codigo) throw new Error('No hay código generado')
-
-  // Verificar vencimiento (15 minutos)
-  const fechaCodigo = new Date(usuario.fecha_codigo)
-  const ahora = new Date()
-  const diffMinutos = (ahora - fechaCodigo) / 1000 / 60
-
-  if (diffMinutos > 15) throw new Error('El código ha vencido')
-  if (usuario.codigo !== codigo) throw new Error('Código incorrecto')
-
-  return { mensaje: 'Código válido' }
-}
-
-const cambiarPassword = async (email, codigo, nuevaPassword) => {
-  // Verificar código primero
-  await verificarCodigo(email, codigo)
-
-  const sheets = getSheetsClient()
-  const response = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: 'Usuarios!A2:AB15',
-  })
-
-  const filas = response.data.values || []
-  const filaIndex = filas.findIndex(f => f[1] === email)
-  if (filaIndex === -1) throw new Error('Usuario no encontrado')
-
-  const filaEnHoja = filaIndex + 2
-  const filaActual = filas[filaIndex]
-
-  filaActual[2] = nuevaPassword  
-  filaActual[26] = ''            
-  filaActual[27] = ''            
-
-  await sheets.spreadsheets.values.update({
-    spreadsheetId,
-    range: `Usuarios!A${filaEnHoja}:AB${filaEnHoja}`,
-    valueInputOption: 'RAW',
-    requestBody: { values: [filaActual] },
-  })
-
-  return { mensaje: 'Contraseña actualizada correctamente' }
-}
 
 const obtenerPropietarioPorPlaca = async (placa) => {
-  const usuarios = await leerUsuariosDesdeSheets()
-  return usuarios.find(u => 
-    u.perfil === 'propietario' && 
-    u.placa_asignada?.split(',').map(p => p.trim().toLowerCase()).includes(placa.toLowerCase())
-  ) || null
-}
+  const buscada = String(placa ?? '').replace(/\s+/g, '').toUpperCase();
+  return (
+    (await getUsuarios()).find(
+      (u) => u.perfil === 'propietario' && u.estado === 'activo' && placasDe(u).includes(buscada)
+    ) || null
+  );
+};
 
+/** Correos a notificar por una placa: el propietario de la placa + todos los administradores activos */
 const obtenerDestinatariosNotificacion = async (placa) => {
-  const usuarios = await leerUsuariosDesdeSheets()
-  
-  const destinatarios = []
+  const usuarios = await getUsuarios();
+  const buscada = String(placa ?? '').replace(/\s+/g, '').toUpperCase();
+  const destinatarios = new Set();
 
-  // Buscar propietario de esa placa
-  const propietario = usuarios.find(u => 
-    u.perfil === 'propietario' && 
-    u.placa_asignada?.split(',').map(p => p.trim().toLowerCase()).includes(placa.toLowerCase())
-  )
+  usuarios
+    .filter((u) => u.perfil === 'propietario' && u.estado === 'activo' && placasDe(u).includes(buscada))
+    .forEach((u) => destinatarios.add(u.email));
 
-  if (propietario) destinatarios.push(propietario.email)
+  usuarios
+    .filter((u) => u.perfil === 'administrador' && u.estado === 'activo')
+    .forEach((u) => destinatarios.add(u.email));
 
-  // Siempre agregar administrador(es)
-  const admins = usuarios.filter(u => u.perfil === 'administrador')
-  console.log('Admin email:', admins[0]?.email)
-console.log('Admin keys:', Object.keys(admins[0] || {}))
-  admins.forEach(a => {
-    if (!destinatarios.includes(a.email)) {
-      destinatarios.push(a.email)
+  return [...destinatarios];
+};
+
+// ── Permisos sobre otros usuarios ──
+
+/** ¿Quien (usuario del token) puede ver/gestionar a objetivo? */
+const puedeGestionar = (quien, objetivo) => {
+  if (!quien || !objetivo) return false;
+  if (quien.perfil === 'administrador') return true;
+  if (quien.perfil === 'propietario') {
+    if (objetivo.perfil !== 'conductor') return false;
+    const mias = listaPlacas(quien.placa_asignada);
+    return placasDe(objetivo).some((p) => mias.includes(p));
+  }
+  return false;
+};
+
+const puedeVer = (quien, objetivo) =>
+  !!quien && !!objetivo && (normalizarEmail(quien.email) === objetivo.email || puedeGestionar(quien, objetivo));
+
+// ── Login ──
+
+const loginUsuario = async ({ email, password, ip = '', version = '' }) => {
+  const correo = normalizarEmail(email);
+  if (!correo || !password) throw new ErrorApp(400, 'El correo y la contraseña son obligatorios');
+
+  const bloqueo = await accesosHelper.estaBloqueado(correo);
+  if (bloqueo.bloqueado) {
+    throw new ErrorApp(429, `Demasiados intentos fallidos. Intente de nuevo en ${bloqueo.minutos} minuto(s).`);
+  }
+
+  const { usuarios } = await leerUsuarios({ fresco: true });
+  const usuario = usuarios.find((u) => u.email === correo);
+  const correcta = usuario ? await verificarPassword(password, usuario.password) : false;
+
+  if (!correcta) {
+    await accesosHelper.registrarAcceso({
+      email: correo, resultado: 'fallido', motivo: usuario ? 'password' : 'usuario_no_existe', ip, version,
+    });
+    throw new ErrorApp(400, 'Usuario o contraseña incorrecta');
+  }
+
+  if (usuario.estado !== 'activo') {
+    await accesosHelper.registrarAcceso({ email: correo, resultado: 'fallido', motivo: 'inactivo', ip, version });
+    throw new ErrorApp(403, 'Su usuario está inactivo. Comuníquese con el administrador.');
+  }
+
+  // Migración transparente: si la contraseña está en texto plano se guarda con hash
+  // y se obliga a cambiarla (las contraseñas viejas eran compartidas, p. ej. LJC2026).
+  let versionPassword = usuario.password_actualizada || '';
+  let debeCambiar = usuario.debe_cambiar_password === 'si';
+
+  if (!esHash(usuario.password)) {
+    versionPassword = versionPassword || nuevaVersion();
+    debeCambiar = true;
+    await escribir(usuario, {
+      password: await hashear(password),
+      password_actualizada: versionPassword,
+      debe_cambiar_password: 'si',
+    });
+  }
+
+  await accesosHelper.registrarAcceso({ email: correo, resultado: 'ok', ip, version });
+
+  const token = await generarJWT(usuario.email, versionPassword);
+  return {
+    token,
+    usuario: { ...sanitizar(usuario), debe_cambiar_password: debeCambiar ? 'si' : 'no' },
+  };
+};
+
+// ── Crear / editar ──
+
+const tomarCampos = (datos, campos) => {
+  const resultado = {};
+  campos.forEach((campo) => {
+    if (datos[campo] !== undefined && datos[campo] !== null) {
+      resultado[campo] = typeof datos[campo] === 'string' ? datos[campo].trim() : datos[campo];
     }
-  })
+  });
+  return resultado;
+};
 
-  return destinatarios
-}
+const aNumero = (valor) => {
+  if (valor === '' || valor === undefined || valor === null) return '';
+  const n = Number(String(valor).replace(/[^\d.-]/g, ''));
+  return Number.isFinite(n) ? n : '';
+};
+
+const prepararFechas = (datos) => {
+  ['fecha_expedicion', 'fecha_nacimiento', 'fecha_expedicion_licencia', 'fecha_vencimiento_licencia'].forEach((campo) => {
+    if (datos[campo] !== undefined && datos[campo] !== '') datos[campo] = aFechaISO(datos[campo]) || datos[campo];
+  });
+  if (datos.fecha_expedicion_licencia && !datos.fecha_vencimiento_licencia) {
+    datos.fecha_vencimiento_licencia = sumarAnios(datos.fecha_expedicion_licencia, 2);
+  }
+  return datos;
+};
+
+/**
+ * Valida las placas que alguien intenta asignar.
+ * El propietario solo puede asignar placas que él mismo tiene.
+ */
+const validarPlacas = (quien, placasTexto) => {
+  const placas = listaPlacas(placasTexto);
+  if (quien.perfil === 'propietario') {
+    const mias = listaPlacas(quien.placa_asignada);
+    const ajenas = placas.filter((p) => !mias.includes(p));
+    if (ajenas.length) throw new ErrorApp(403, `No puede asignar placas que no son suyas: ${ajenas.join(', ')}`);
+  }
+  return placas.join(', ');
+};
+
+const guardarUsuario = async (quien, datos) => {
+  const email = normalizarEmail(datos.email);
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new ErrorApp(400, 'Correo electrónico no válido');
+  if (!datos.nombre) throw new ErrorApp(400, 'El nombre es obligatorio');
+
+  const perfil = quien.perfil === 'propietario' ? 'conductor' : String(datos.perfil || '').toLowerCase();
+  if (!PERFILES.includes(perfil)) throw new ErrorApp(400, 'Perfil no válido');
+
+  validarNuevaPassword(datos.password);
+
+  const { encabezados, usuarios } = await leerUsuarios({ fresco: true });
+  if (usuarios.some((u) => u.email === email)) throw new ErrorApp(409, 'Ya existe un usuario con ese correo');
+
+  const nuevo = prepararFechas({
+    ...tomarCampos(datos, CAMPOS_PERSONALES),
+    ...tomarCampos(datos, CAMPOS_NOMINA),
+    ...(quien.perfil === 'administrador' ? tomarCampos(datos, CAMPOS_BANCO) : {}),
+  });
+  nuevo.salario_base = aNumero(nuevo.salario_base);
+  nuevo.sso = aNumero(nuevo.sso);
+
+  await agregarFila(HOJA, encabezados, {
+    ...nuevo,
+    email,
+    perfil,
+    estado: 'activo',
+    placa_asignada: validarPlacas(quien, datos.placa_asignada),
+    password: await hashear(datos.password),
+    password_actualizada: nuevaVersion(),
+    debe_cambiar_password: 'si', // la contraseña la puso otra persona: se cambia en el primer ingreso
+    viajes_realizados: 0,
+    intentos_codigo: 0,
+  });
+
+  invalidarCache();
+  return { nombre: nuevo.nombre, email };
+};
+
+const editarUsuario = async (quien, email, datos) => {
+  const { usuarios } = await leerUsuarios({ fresco: true });
+  const objetivo = usuarios.find((u) => u.email === normalizarEmail(email));
+  if (!objetivo) return null;
+  if (!puedeGestionar(quien, objetivo)) throw new ErrorApp(403, 'No tiene permiso para editar este usuario');
+
+  const cambios = prepararFechas({
+    ...tomarCampos(datos, CAMPOS_PERSONALES),
+    ...tomarCampos(datos, CAMPOS_NOMINA),
+  });
+
+  if (quien.perfil === 'administrador') {
+    Object.assign(cambios, tomarCampos(datos, CAMPOS_BANCO));
+    if (datos.perfil !== undefined) {
+      const perfil = String(datos.perfil).toLowerCase();
+      if (!PERFILES.includes(perfil)) throw new ErrorApp(400, 'Perfil no válido');
+      if (normalizarEmail(quien.email) === objetivo.email && perfil !== 'administrador') {
+        throw new ErrorApp(400, 'No puede quitarse a sí mismo el perfil de administrador');
+      }
+      cambios.perfil = perfil;
+    }
+  }
+
+  if (datos.placa_asignada !== undefined) {
+    cambios.placa_asignada = validarPlacas(quien, datos.placa_asignada);
+  }
+
+  if (cambios.nombre === '') throw new ErrorApp(400, 'El nombre no puede quedar vacío');
+  if (cambios.salario_base !== undefined) cambios.salario_base = aNumero(cambios.salario_base);
+  if (cambios.sso !== undefined) cambios.sso = aNumero(cambios.sso);
+
+  // El correo NO se cambia (es la llave de viajes, nóminas, préstamos...). La contraseña tiene su propio flujo.
+  await escribir(objetivo, cambios);
+  return true;
+};
+
+/** Admin / propietario pone una contraseña temporal a otro usuario. Cierra sus sesiones abiertas */
+const restablecerPassword = async (quien, email, nuevaPassword) => {
+  validarNuevaPassword(nuevaPassword);
+  const { usuarios } = await leerUsuarios({ fresco: true });
+  const objetivo = usuarios.find((u) => u.email === normalizarEmail(email));
+  if (!objetivo) return null;
+  if (!puedeGestionar(quien, objetivo)) throw new ErrorApp(403, 'No tiene permiso sobre este usuario');
+
+  await escribir(objetivo, {
+    password: await hashear(nuevaPassword),
+    password_actualizada: nuevaVersion(),
+    debe_cambiar_password: 'si',
+  });
+  return true;
+};
+
+/** El usuario cambia su propia contraseña. Devuelve un token nuevo (los anteriores dejan de servir) */
+const cambiarMiPassword = async (email, actual, nueva) => {
+  validarNuevaPassword(nueva);
+  const { usuarios } = await leerUsuarios({ fresco: true });
+  const usuario = usuarios.find((u) => u.email === normalizarEmail(email));
+  if (!usuario) throw new ErrorApp(404, 'Usuario no encontrado');
+
+  if (!(await verificarPassword(actual, usuario.password))) throw new ErrorApp(400, 'La contraseña actual no es correcta');
+  if (String(actual) === String(nueva)) throw new ErrorApp(400, 'La nueva contraseña debe ser diferente a la actual');
+
+  const version = nuevaVersion();
+  await escribir(usuario, {
+    password: await hashear(nueva),
+    password_actualizada: version,
+    debe_cambiar_password: 'no',
+  });
+
+  const token = await generarJWT(usuario.email, version);
+  return { token, usuario: { ...sanitizar(usuario), debe_cambiar_password: 'no' } };
+};
+
+const actualizarEstadoEnSheets = async (quien, email, nuevoEstado) => {
+  const estado = String(nuevoEstado).toLowerCase();
+  if (!['activo', 'inactivo'].includes(estado)) throw new ErrorApp(400, 'Estado no válido');
+
+  const { usuarios } = await leerUsuarios({ fresco: true });
+  const objetivo = usuarios.find((u) => u.email === normalizarEmail(email));
+  if (!objetivo) return null;
+  if (!puedeGestionar(quien, objetivo)) throw new ErrorApp(403, 'No tiene permiso sobre este usuario');
+  if (normalizarEmail(quien.email) === objetivo.email) throw new ErrorApp(400, 'No puede desactivarse a sí mismo');
+
+  await escribir(objetivo, { estado });
+  return true;
+};
+
+// ── Recuperación de contraseña por correo ──
+
+const MENSAJE_CODIGO_ENVIADO = 'Si el correo está registrado, le enviamos un código de verificación';
+
+const solicitarRecuperacion = async (email) => {
+  const { usuarios } = await leerUsuarios({ fresco: true });
+  const usuario = usuarios.find((u) => u.email === normalizarEmail(email));
+
+  // Misma respuesta exista o no el correo (no revela quién está registrado)
+  if (!usuario || usuario.estado !== 'activo') return { mensaje: MENSAJE_CODIGO_ENVIADO };
+
+  // Evita reenviar si pidió uno hace menos de 1 minuto
+  if (usuario.codigo && minutosDesde(usuario.fecha_codigo) < 1) return { mensaje: MENSAJE_CODIGO_ENVIADO };
+
+  const codigo = String(crypto.randomInt(100000, 1000000));
+  await escribir(usuario, {
+    codigo: await hashear(codigo),
+    fecha_codigo: ahora(),
+    intentos_codigo: 0,
+  });
+
+  try {
+    await enviarCodigoRecuperacion(usuario.email, usuario.nombre, codigo);
+  } catch (error) {
+    console.error('Error enviando código de recuperación:', error.message);
+    throw new ErrorApp(500, 'No se pudo enviar el correo. Intente más tarde o comuníquese con el administrador.');
+  }
+
+  return { mensaje: MENSAJE_CODIGO_ENVIADO };
+};
+
+const comprobarCodigo = async (email, codigo) => {
+  const { usuarios } = await leerUsuarios({ fresco: true });
+  const usuario = usuarios.find((u) => u.email === normalizarEmail(email));
+
+  if (!usuario || !usuario.codigo) throw new ErrorApp(400, 'Solicite un código nuevo');
+  if (minutosDesde(usuario.fecha_codigo) > VIGENCIA_CODIGO_MIN) throw new ErrorApp(400, 'El código venció. Solicite uno nuevo');
+
+  const intentos = Number(usuario.intentos_codigo) || 0;
+  if (intentos >= MAX_INTENTOS_CODIGO) throw new ErrorApp(429, 'Demasiados intentos. Solicite un código nuevo');
+
+  const correcto = esHash(usuario.codigo)
+    ? await bcrypt.compare(String(codigo ?? '').trim(), usuario.codigo)
+    : String(codigo ?? '').trim() === String(usuario.codigo);
+
+  if (!correcto) {
+    await escribir(usuario, { intentos_codigo: intentos + 1 });
+    throw new ErrorApp(400, 'Código incorrecto');
+  }
+  return usuario;
+};
+
+const verificarCodigo = async (email, codigo) => {
+  await comprobarCodigo(email, codigo);
+  return { mensaje: 'Código válido' };
+};
+
+const cambiarPassword = async (email, codigo, nuevaPassword) => {
+  validarNuevaPassword(nuevaPassword);
+  const usuario = await comprobarCodigo(email, codigo);
+
+  await escribir(usuario, {
+    password: await hashear(nuevaPassword),
+    password_actualizada: nuevaVersion(),
+    debe_cambiar_password: 'no',
+    codigo: '',
+    fecha_codigo: '',
+    intentos_codigo: 0,
+  });
+
+  return { mensaje: 'Contraseña actualizada correctamente' };
+};
 
 export const usuarioHelper = {
+  // lectura interna
   getUsuarios,
+  leerUsuariosDesdeSheets,
+  getUsuarioByEmail,
+  getUsuarioByStatus,
+  getUsuarioPorEstado,
+  getUsuarioPorPerfil,
+  getUsuariosPorPropietario,
+  getUsuariosOrdenadosPorViajes,
+  getUsuariosOrdenadosPorFechaLicencia,
+  obtenerPropietarioPorPlaca,
+  obtenerDestinatariosNotificacion,
+  // permisos y formato
+  sanitizar,
+  puedeVer,
+  puedeGestionar,
+  placasDe,
+  listaPlacas,
+  normalizarEmail,
+  invalidarCache,
+  // escritura
   loginUsuario,
   guardarUsuario,
   editarUsuario,
-  editarPasswordUsuario,
+  restablecerPassword,
+  cambiarMiPassword,
   actualizarEstadoEnSheets,
-  getUsuarioByStatus,
-  getUsuarioByEmail,
-  getUsuariosPorPropietario,
-  getUsuarioPorPerfil,
-  getUsuarioPorEstado,
-  getUsuariosOrdenadosPorViajes,
-  getUsuariosOrdenadosPorFechaLicencia,
-  getSheetsClient,
-  leerUsuariosDesdeSheets,
   solicitarRecuperacion,
   verificarCodigo,
   cambiarPassword,
-  obtenerPropietarioPorPlaca,
-  obtenerDestinatariosNotificacion
+  // compatibilidad
+  getSheetsClient,
 };

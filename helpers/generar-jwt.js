@@ -1,19 +1,23 @@
 import jwt from 'jsonwebtoken';
 
-const generarJWT = (id, perfil, email, nombre, placa_asignada) => {
+// El token solo identifica al usuario. Perfil, placas y estado se leen de la hoja
+// en cada petición (validar-jwt.js), así un cambio de placa o perfil aplica de inmediato.
+//
+// pv = "versión de contraseña" (columna password_actualizada). Si la contraseña cambia,
+// los tokens anteriores dejan de servir: así se saca a un celular perdido o robado.
+//
+// Dura 365 días: los conductores no deben iniciar sesión a cada rato.
+
+const generarJWT = (email, versionPassword = '') => {
   return new Promise((resolve, reject) => {
-    const payload = { id, perfil, email, nombre, placa_asignada };
-    
     jwt.sign(
-      payload,
+      { uid: email, pv: String(versionPassword || '') },
       process.env.SECRETORPRIVATEKEY,
-      {
-        expiresIn: '365d'
-      },
+      { expiresIn: '365d' },
       (err, token) => {
         if (err) {
-          console.log(err);
-          reject('No se pudo generar el token');
+          console.error('No se pudo generar el token:', err);
+          reject(new Error('No se pudo generar el token'));
         } else {
           resolve(token);
         }

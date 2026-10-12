@@ -1,144 +1,88 @@
 import { gastosVehiculoHelper } from '../helpers/gastos.js';
+import { responderError } from '../helpers/errores.js';
+import { esAdmin, puedeVerPlaca } from '../middlewares/validar-rol.js';
 
 const ORDENAMIENTO_HANDLERS = {
-  valor_gasto: gastosVehiculoHelper.getVehiculoOrdenadosPorValor
+  valor_gasto: gastosVehiculoHelper.getVehiculoOrdenadosPorValor,
+  fecha: gastosVehiculoHelper.getGastosOrdenadosPorFecha,
 };
-
 const TIPOS_ORDENAMIENTO = Object.keys(ORDENAMIENTO_HANDLERS);
 
 const httpGastosVehiculos = {
-
-registrarGasto: async (req, res) => {
+  /** Gasto manual (soat, técnico, póliza, impuesto, llantas, repuestos, otro…) con soportes opcionales */
+  registrarGasto: async (req, res) => {
     try {
-      const { email, nombre } = req.usuariobdtoken;
-      const { placa, tipo_gasto, valor_gasto, descripcion } = req.body;
-
-      const fecha_registro = new Date().toISOString().split('T')[0];
-
-      const resultado = await gastosVehiculoHelper.registrarGasto({
-        placa,
-        tipo_gasto,
-        codigo_referencia: `MANUAL-${Date.now()}`,
-        valor_gasto: parseFloat(valor_gasto),
-        descripcion: descripcion || `Gasto manual: ${tipo_gasto}`,
-        fecha_registro
-      });
-
-      res.status(200).json({
-        mensaje: 'Gasto registrado correctamente',
-        consecutivo: resultado.consecutivo
-      });
+      const { advertencia, ...resultado } = await gastosVehiculoHelper.registrarGastoManual(req.body, req.files || []);
+      res.status(201).json({ mensaje: advertencia || 'Gasto registrado correctamente', advertencia, ...resultado });
     } catch (error) {
-      console.error('Error al registrar gasto:', error);
-      res.status(500).json({ mensaje: 'Error interno del servidor' });
+      responderError(res, error, 'Error al registrar gasto');
     }
-},
+  },
 
-listarGastos: async (req, res) => {
+  listarGastos: async (req, res) => {
     try {
-      const gastos = await gastosVehiculoHelper.getGastosVehiculos();
-      res.json(gastos);
+      res.json(await gastosVehiculoHelper.getGastosVehiculos());
     } catch (error) {
-      console.error('Error al listar gastos:', error);
-      res.status(500).json({ mensaje: 'Error al obtener gastos' });
+      responderError(res, error, 'Error al listar gastos');
     }
-},
+  },
 
-obtenerResumenPorPlaca: async (req, res) => {
-  try {
-    const { placa } = req.params
-    if (!placa) {
-      return res.status(400).json({
-        ok: false,
-        mensaje: 'Placa requerida'
-      })
+  obtenerResumenPorPlaca: async (req, res) => {
+    try {
+      const placas = String(req.params.placa || '').split(',').map((p) => p.trim()).filter(Boolean);
+      if (!placas.length) return res.status(400).json({ ok: false, mensaje: 'Placa requerida' });
+      const resumen = await gastosVehiculoHelper.getResumenGastosPorPlaca(placas);
+      res.json({ ok: true, resumen, placas, mensaje: 'Resumen obtenido exitosamente' });
+    } catch (error) {
+      responderError(res, error, 'Error al obtener resumen por placa');
     }
+  },
 
-    const placas = placa.split(',')
-
-    const resumen = await gastosVehiculoHelper.getResumenGastosPorPlaca(placas)
-
-    res.json({
-      ok: true,
-      resumen,
-      placas,
-      mensaje: 'Resumen obtenido exitosamente'
-    })
-
-  } catch (error) {
-    console.error('Error al obtener resumen por placa:', error)
-    res.status(500).json({
-      ok: false,
-      mensaje: 'Error interno del servidor',
-      error: error.message
-    })
-  }
-},
-
-obtenerGastoporConsecutivo: async (req, res) => {
-      try {
-        const { consecutivo } = req.params;
-        const gasto = await gastosVehiculoHelper.getGastoById(consecutivo);
-    
-        if (!gasto) {
-          return res.status(404).json({ mensaje: 'gasto no encontrado' });
-        }
-    
-        res.json(gasto);
-      } catch (error) {
-        console.error('Error al obtener gasto:', error);
-        res.status(500).json({ mensaje: 'Error al obtener gasto' });
+  obtenerGastoporConsecutivo: async (req, res) => {
+    try {
+      const gasto = await gastosVehiculoHelper.getGastoById(req.params.consecutivo);
+      const usuario = req.usuariobdtoken;
+      if (!gasto || (!esAdmin(usuario) && !puedeVerPlaca(usuario, gasto.placa))) {
+        return res.status(404).json({ mensaje: 'Gasto no encontrado' });
       }
-},
-
-obtenerGastosOrdenados: async (req, res) => {
-  try {
-    const { tipo = "tiempo", orden = "desc" } = req.query;
-    
-    if (orden !== "asc" && orden !== "desc") {
-      return res
-        .status(400)
-        .json({ mensaje: 'El parámetro orden debe ser "asc" o "desc"' });
+      res.json(gasto);
+    } catch (error) {
+      responderError(res, error, 'Error al obtener gasto');
     }
-    
-    const tipoLower = tipo.toLowerCase();
-    if (!TIPOS_ORDENAMIENTO.includes(tipoLower)) {
-      return res
-        .status(400)
-        .json({ 
+  },
+
+  obtenerGastosOrdenados: async (req, res) => {
+    try {
+      const { tipo = 'fecha', orden = 'desc' } = req.query;
+      if (orden !== 'asc' && orden !== 'desc') {
+        return res.status(400).json({ mensaje: 'El parámetro orden debe ser "asc" o "desc"' });
+      }
+      const handler = ORDENAMIENTO_HANDLERS[String(tipo).toLowerCase()];
+      if (!handler) {
+        return res.status(400).json({
           mensaje: `El parámetro tipo debe ser uno de: ${TIPOS_ORDENAMIENTO.join(', ')}`,
-          tiposPermitidos: TIPOS_ORDENAMIENTO
+          tiposPermitidos: TIPOS_ORDENAMIENTO,
         });
+      }
+      res.json(await handler(orden));
+    } catch (error) {
+      responderError(res, error, 'Error al ordenar gastos');
     }
-    
-    const handlerFn = ORDENAMIENTO_HANDLERS[tipoLower];
-    const gastos = await handlerFn(orden);
-    
-    res.json(gastos);
-  } catch (error) {
-    console.error("Error al obtener gastos ordenados:", error);
-    res.status(500).json({ mensaje: "Error al obtener gastos" });
-  }
-},
+  },
 
-editarGasto: async (req, res) => {
-  try {
-    const { consecutivo } = req.params;
-    const nuevosDatos = req.body;
-
-    const resultado = await gastosVehiculoHelper.editarGastoporConsecutivo(consecutivo, nuevosDatos);
-
-    if (!resultado) {
-      return res.status(404).json({ mensaje: 'Gasto no encontrado' });
+  editarGasto: async (req, res) => {
+    try {
+      const actual = await gastosVehiculoHelper.getGastoById(req.params.consecutivo);
+      const usuario = req.usuariobdtoken;
+      if (!actual || (!esAdmin(usuario) && !puedeVerPlaca(usuario, actual.placa))) {
+        return res.status(404).json({ mensaje: 'Gasto no encontrado' });
+      }
+      await gastosVehiculoHelper.editarGastoporConsecutivo(req.params.consecutivo, req.body, req.files || []);
+      res.json({ mensaje: 'Gasto actualizado correctamente' });
+    } catch (error) {
+      responderError(res, error, 'Error al editar gasto');
     }
-
-    res.status(200).json({ mensaje: 'Gasto actualizado correctamente' });
-  } catch (error) {
-    console.error('Error al editar Gasto:', error);
-    res.status(500).json({ mensaje: 'Error interno del servidor' });
-  }
-},
-
+  },
 };
 
 export default httpGastosVehiculos;

@@ -19,13 +19,19 @@ import drive from './routes/drive.js'
 import { firebaseHelper } from "./helpers/firebase.js";
 import health from "./routes/health.js"
 import iniciarCron from './cron.js';
+import { validarVersionApp } from './middlewares/version-app.js';
+import { verificarColumnas } from './helpers/hoja.js';
+import { COLUMNAS_VIAJES, COLUMNAS_NOMINA, COLUMNAS_PRESTAMOS } from './helpers/columnas.js';
 
 const app = express();
+
+// Render está detrás de un proxy: así req.ip es la IP real (se guarda en la hoja Accesos)
+app.set('trust proxy', 1);
 
 firebaseHelper.initializeFirebaseAdmin();
 iniciarCron();
 
-const whitelist = ['https://localhost','http://localhost:9000', 'http://localhost', 'http://localhost:3000', 'capacitor://localhost', 'ionic://localhost'];
+const whitelist = ['https://localhost', 'http://localhost:9000', 'http://localhost', 'http://localhost:3000', 'capacitor://localhost', 'ionic://localhost'];
 const corsOptions = {
   origin: function (origin, callback) {
     if (!origin || whitelist.includes(origin)) {
@@ -42,18 +48,21 @@ app.use(cors(corsOptions));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-app.use("/api/usuarios",usuarios)
-app.use("/api/mantenimientos",mantenimientos)
-app.use("/api/vehiculos",vehiculos)
-app.use("/api/clientes",clientes)
-app.use("/api/solicitudes",solicitudes)
-app.use("/api/preoperacionales",preoperacionales)
-app.use("/api/prestamos",prestamos)
-app.use("/api/viajes",viajes)
-app.use("/api/combustible",combustible)
-app.use("/api/gastos",gastos)
-app.use("/api/resumenvehiculo",resumenvehiculo)
-app.use("/api/nomina",nomina)
+// Si MIN_APP_VERSION está en el .env, las apps más viejas reciben "actualice la app"
+app.use(validarVersionApp);
+
+app.use("/api/usuarios", usuarios)
+app.use("/api/mantenimientos", mantenimientos)
+app.use("/api/vehiculos", vehiculos)
+app.use("/api/clientes", clientes)
+app.use("/api/solicitudes", solicitudes)
+app.use("/api/preoperacionales", preoperacionales)
+app.use("/api/prestamos", prestamos)
+app.use("/api/viajes", viajes)
+app.use("/api/combustible", combustible)
+app.use("/api/gastos", gastos)
+app.use("/api/resumenvehiculo", resumenvehiculo)
+app.use("/api/nomina", nomina)
 app.use('/api/satrack', satrack)
 app.use('/api/alertas', alertas)
 app.use('/api/drive', drive)
@@ -63,6 +72,19 @@ const PORT = process.env.PORT || 4000;
 
 app.listen(PORT, () => {
   console.log(`Servidor escuchando en el puerto ${PORT}`);
+
+  // Aviso en el log si faltan columnas nuevas en la hoja (no detiene el servidor)
+  verificarColumnas('Usuarios', ['password_actualizada', 'debe_cambiar_password', 'intentos_codigo', 'codigo', 'fecha_codigo']);
+  verificarColumnas('Accesos', ['fecha', 'email', 'resultado', 'motivo', 'ip', 'version_app']);
+  verificarColumnas('Viajes', COLUMNAS_VIAJES);
+  verificarColumnas('Nomina_Conductores', COLUMNAS_NOMINA);
+  verificarColumnas('Prestamos', COLUMNAS_PRESTAMOS);
+  verificarColumnas('Combustible', ['consecutivo', 'placa', 'odometro_actual', 'galones_cargados', 'valor_pagado', 'tanque_lleno', 'galones_acumulados', 'km_desde_lleno', 'estado_factura', 'numero_factura', 'link_factura']);
+  verificarColumnas('Mantenimientos', ['consecutivo', 'placa', 'valor_mantenimiento', 'estado_factura', 'numero_factura', 'link_factura']);
+  verificarColumnas('Alertas', ['consecutivo', 'tipo_alerta', 'estado_alerta', 'fecha_primera_deteccion', 'ultimo_recordatorio', 'cantidad_recordatorios', 'email_destino']);
+  verificarColumnas('Detalle_Gastos_Viajes', [
+    'consecutivo_viaje', 'tipo_gasto', 'quien', 'valor', 'tipo_factura', 'estado_factura', 'numero_factura', 'link_soporte', 'descripcion',
+  ]);
 });
 
 export default app;
