@@ -31,7 +31,7 @@ app.set('trust proxy', 1);
 firebaseHelper.initializeFirebaseAdmin();
 iniciarCron();
 
-const whitelist = ['https://localhost', 'http://localhost:9000', 'http://localhost', 'http://localhost:3000', 'capacitor://localhost', 'ionic://localhost'];
+const whitelist = ['https://localhost', 'http://localhost:9000', 'http://localhost', 'http://localhost:3000', 'capacitor://localhost', 'ionic://localhost', 'https://frontend-app-ljc.onrender.com'];
 const corsOptions = {
   origin: function (origin, callback) {
     if (!origin || whitelist.includes(origin)) {
