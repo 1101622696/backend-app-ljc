@@ -8,7 +8,7 @@ import { ahora, hoy, aFechaISO, parsearFecha } from './fechas.js';
 import { ErrorApp } from './errores.js';
 import {
   ESTADOS,
-  ESTADOS_ABIERTOS,
+  // ESTADOS_ABIERTOS,
   ESTADOS_LIQUIDABLES,
   PREOPERACIONAL,
   TIPOS_GASTO,
@@ -327,13 +327,13 @@ const crearViaje = (usuario, datos) =>
 
     const { encabezados, viajes } = await leerViajes();
 
-    const abierto = viajes.find((v) => v.placa === placa && ESTADOS_ABIERTOS.includes(v.estado_viaje));
-    if (abierto) {
-      throw new ErrorApp(
-        409,
-        `La placa ${placa} ya tiene el viaje ${abierto.consecutivo} abierto (${NOMBRES_ESTADO[abierto.estado_viaje]}). Ciérrelo antes de pedir otro anticipo.`
-      );
-    }
+    // const abierto = viajes.find((v) => v.placa === placa && ESTADOS_ABIERTOS.includes(v.estado_viaje));
+    // if (abierto) {
+    //   throw new ErrorApp(
+    //     409,
+    //     `La placa ${placa} ya tiene el viaje ${abierto.consecutivo} abierto (${NOMBRES_ESTADO[abierto.estado_viaje]}). Ciérrelo antes de pedir otro anticipo.`
+    //   );
+    // }
 
     const consecutivo = siguienteConsecutivo(viajes, 'consecutivo', 'V');
     const nuevo = {
